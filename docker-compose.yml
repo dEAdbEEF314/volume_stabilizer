@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    container_name: volume_stabilizer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount your music directory (read-only for safety)
+      - ./music:/music:ro
+      # Output directory for stabilized DJ tracks
+      - ./output:/output
+      # Persistent SQLite database & cache
+      - ./data:/data
+    environment:
+      - VS_INPUT_ROOT=/music
+      - VS_OUTPUT_ROOT=/output
+      - VS_DATA_DIR=/data
+      - VS_TARGET_LUFS=-10.0
+      - VS_PEAK_CEILING=-1.0
+      - VS_MAX_REDUCTION=3.0
+      - VS_WORKERS=0 # 0 = auto (CPU cores - 1)

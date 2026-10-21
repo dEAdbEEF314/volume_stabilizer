@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Volume Stabilizer | DJ Library Loudness Normalizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2v20M17 5v14M7 9v6M22 8v8M2 11v2"/>
+          </svg>
+        </div>
+        <div>
+          <h1>Volume Stabilizer</h1>
+          <span class="sub-brand">DJ Library Loudness Normalizer &bull; EBU R128</span>
+        </div>
+      </div>
+      <div class="system-stats" id="system-stats">
+        <div class="stat-pill"><span class="label">Target:</span> <span class="val" id="stat-target">-10.0 LUFS</span></div>
+        <div class="stat-pill"><span class="label">Ceiling:</span> <span class="val" id="stat-ceiling">-1.0 dBTP</span></div>
+        <div class="stat-pill"><span class="label">Workers:</span> <span class="val" id="stat-workers">-</span></div>
+        <div class="stat-pill"><span class="label">Stabilized:</span> <span class="val highlight" id="stat-stabilized">0</span></div>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="main-content">
+      <!-- Sidebar / Folder Navigation -->
+      <aside class="sidebar-card">
+        <div class="card-header">
+          <h2>Source Library (/music)</h2>
+          <button id="btn-refresh-tree" class="btn-icon" title="Refresh Directory">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          </button>
+        </div>
+        <div class="current-path-bar">
+          <span class="path-prefix">Root:</span>
+          <span id="current-dir-display" class="path-text">/</span>
+        </div>
+        <div class="folder-list-container" id="folder-list">
+          <div class="loader-spinner">Loading library...</div>
+        </div>
+        <div class="folder-summary" id="folder-summary">
+          <span id="folder-audio-count">0 tracks in current folder</span>
+        </div>
+      </aside>
+
+      <!-- Center Workspace (Two-Stage Workflow) -->
+      <section class="workspace-area">
+        <!-- Stage Controls Bar -->
+        <div class="action-bar-card">
+          <div class="action-controls-left">
+            <div class="step-badge active" id="step-1-badge">Step 1: Analyze</div>
+            <button id="btn-analyze" class="btn btn-primary">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              Analyze Folder
+            </button>
+            <div class="step-badge" id="step-2-badge">Step 2: Convert</div>
+            <button id="btn-convert" class="btn btn-accent" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5v14M7 9v6"/></svg>
+              Stabilize Selected
+            </button>
+          </div>
+          <div class="action-controls-right">
+            <label class="toggle-control" title="Reprocess already stabilized files and create backup">
+              <input type="checkbox" id="check-force-mode">
+              <span class="toggle-track"></span>
+              <span class="toggle-label">Force Reprocess</span>
+            </label>
+            <button id="btn-export-csv" class="btn btn-secondary">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+              Export CSV
+            </button>
+          </div>
+        </div>
+
+        <!-- Realtime Progress Bar Card -->
+        <div class="progress-card" id="progress-container" style="display: none;">
+          <div class="progress-info-row">
+            <div class="job-status-tag" id="job-status-tag">PROCESSING</div>
+            <div class="progress-track-label" id="progress-track-name">Scanning...</div>
+            <div class="progress-percentage" id="progress-percentage">0%</div>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%;"></div>
+          </div>
+        </div>
+
+        <!-- Track Table Card -->
+        <div class="table-card">
+          <div class="table-header-row">
+            <div class="table-title-group">
+              <h3>Track Analysis & Inspection</h3>
+              <span class="badge-count" id="table-track-count">0 tracks</span>
+            </div>
+            <div class="table-actions">
+              <label class="select-all-label">
+                <input type="checkbox" id="select-all-checkbox" checked>
+                <span>Select All</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="data-table" id="tracks-table">
+              <thead>
+                <tr>
+                  <th width="40"><input type="checkbox" id="header-select-all" checked></th>
+                  <th>Relative Path</th>
+                  <th width="80">Format</th>
+                  <th width="100" class="num">LUFS</th>
+                  <th width="100" class="num">True Peak</th>
+                  <th width="100" class="num">Target Gain</th>
+                  <th width="110" class="center">Limiter</th>
+                  <th width="130">Status</th>
+                  <th width="80" class="center">Action</th>
+                </tr>
+              </thead>
+              <tbody id="tracks-table-body">
+                <tr class="empty-row">
+                  <td colspan="9">Select a directory on the left and click <strong>Analyze Folder</strong> to preview loudness.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

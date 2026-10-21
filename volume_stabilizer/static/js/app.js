@@ -1,0 +1,301 @@
+// Volume Stabilizer Web UI Frontend Logic
+let currentPath = "";
+let currentAnalyzeJobId = null;
+let currentTracks = [];
+let ws = null;
+
+// DOM Elements
+const currentDirDisplay = document.getElementById("current-dir-display");
+const folderList = document.getElementById("folder-list");
+const folderAudioCount = document.getElementById("folder-audio-count");
+const btnRefreshTree = document.getElementById("btn-refresh-tree");
+const btnAnalyze = document.getElementById("btn-analyze");
+const btnConvert = document.getElementById("btn-convert");
+const btnExportCsv = document.getElementById("btn-export-csv");
+const checkForceMode = document.getElementById("check-force-mode");
+const selectAllCheckbox = document.getElementById("select-all-checkbox");
+const headerSelectAll = document.getElementById("header-select-all");
+const tracksTableBody = document.getElementById("tracks-table-body");
+const tableTrackCount = document.getElementById("table-track-count");
+const progressContainer = document.getElementById("progress-container");
+const progressTrackName = document.getElementById("progress-track-name");
+const progressPercentage = document.getElementById("progress-percentage");
+const progressBarFill = document.getElementById("progress-bar-fill");
+const jobStatusTag = document.getElementById("job-status-tag");
+const step1Badge = document.getElementById("step-1-badge");
+const step2Badge = document.getElementById("step-2-badge");
+
+// Initialize
+document.addEventListener("DOMContentLoaded", () => {
+  initWebSocket();
+  loadSystemStatus();
+  loadDirectoryTree("");
+
+  btnRefreshTree.addEventListener("click", () => loadDirectoryTree(currentPath));
+  btnAnalyze.addEventListener("click", handleAnalyze);
+  btnConvert.addEventListener("click", handleConvert);
+  btnExportCsv.addEventListener("click", () => {
+    window.location.href = "/api/v1/reports/export";
+  });
+
+  headerSelectAll.addEventListener("change", (e) => toggleSelectAll(e.target.checked));
+  selectAllCheckbox.addEventListener("change", (e) => toggleSelectAll(e.target.checked));
+});
+
+// Load System Status
+async function loadSystemStatus() {
+  try {
+    const res = await fetch("/api/v1/system/status");
+    const data = await res.json();
+    document.getElementById("stat-target").textContent = `${data.target_lufs.toFixed(1)} LUFS`;
+    document.getElementById("stat-ceiling").textContent = `${data.peak_ceiling_dbtp.toFixed(1)} dBTP`;
+    document.getElementById("stat-workers").textContent = data.workers;
+    document.getElementById("stat-stabilized").textContent = `${data.stabilized_tracks} / ${data.total_tracks}`;
+  } catch (err) {
+    console.error("Failed to load status:", err);
+  }
+}
+
+// Directory Browser
+async function loadDirectoryTree(subpath) {
+  currentPath = subpath;
+  currentDirDisplay.textContent = `/${subpath}`;
+  folderList.innerHTML = '<div class="loader-spinner">Loading folders...</div>';
+
+  try {
+    const res = await fetch(`/api/v1/fs/tree?path=${encodeURIComponent(subpath)}`);
+    if (!res.ok) throw new Error("Directory load failed");
+    const data = await res.json();
+
+    folderAudioCount.textContent = `${data.audio_count} audio files in current folder`;
+    folderList.innerHTML = "";
+
+    // Up directory if not at root
+    if (subpath !== "") {
+      const upDiv = document.createElement("div");
+      upDiv.className = "folder-item";
+      upDiv.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+        <span>.. [Parent Directory]</span>
+      `;
+      upDiv.addEventListener("click", () => {
+        const parts = subpath.split("/").filter(Boolean);
+        parts.pop();
+        loadDirectoryTree(parts.join("/"));
+      });
+      folderList.appendChild(upDiv);
+    }
+
+    if (data.subdirs.length === 0 && subpath === "") {
+      folderList.innerHTML = '<div style="padding:1rem;color:var(--text-dim);font-size:0.8rem;">No subdirectories found in /music</div>';
+      return;
+    }
+
+    data.subdirs.forEach(dir => {
+      const item = document.createElement("div");
+      item.className = "folder-item";
+      item.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+        <span>${dir}</span>
+      `;
+      item.addEventListener("click", () => {
+        const next = subpath ? `${subpath}/${dir}` : dir;
+        loadDirectoryTree(next);
+      });
+      folderList.appendChild(item);
+    });
+
+  } catch (err) {
+    folderList.innerHTML = `<div style="padding:1rem;color:var(--accent-red);font-size:0.8rem;">Error: ${err.message}</div>`;
+  }
+}
+
+// WebSocket connection for real-time progress
+function initWebSocket() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${protocol}//${window.location.host}/ws/progress`);
+
+  ws.onopen = () => console.log("WebSocket connected");
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      handleWsEvent(msg);
+    } catch (e) {
+      console.error("WS Parse error", e);
+    }
+  };
+  ws.onclose = () => {
+    console.log("WebSocket closed, retrying in 3s...");
+    setTimeout(initWebSocket, 3000);
+  };
+}
+
+function handleWsEvent(msg) {
+  if (msg.event === "JOB_STARTED") {
+    progressContainer.style.display = "block";
+    jobStatusTag.textContent = msg.data.type;
+    progressPercentage.textContent = "0%";
+    progressBarFill.style.width = "0%";
+  } else if (msg.event === "JOB_PROGRESS") {
+    const d = msg.data;
+    progressPercentage.textContent = `${d.percent}%`;
+    progressBarFill.style.width = `${d.percent}%`;
+    progressTrackName.textContent = d.track || "Processing...";
+  } else if (msg.event === "JOB_COMPLETED") {
+    progressPercentage.textContent = "100%";
+    progressBarFill.style.width = "100%";
+    progressTrackName.textContent = "Completed successfully!";
+    loadSystemStatus();
+
+    if (msg.data.type === "ANALYZE") {
+      fetchJobTracks(currentAnalyzeJobId);
+      step1Badge.classList.remove("active");
+      step2Badge.classList.add("active");
+      btnConvert.disabled = false;
+    } else if (msg.data.type === "CONVERT") {
+      fetchJobTracks(currentAnalyzeJobId);
+    }
+
+    setTimeout(() => {
+      progressContainer.style.display = "none";
+    }, 4000);
+  }
+}
+
+// Stage 1: Analyze
+async function handleAnalyze() {
+  const force = checkForceMode.checked;
+  btnAnalyze.disabled = true;
+
+  try {
+    const res = await fetch("/api/v1/jobs/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subpath: currentPath, force: force })
+    });
+    const data = await res.json();
+    currentAnalyzeJobId = data.job_id;
+  } catch (err) {
+    alert(`Analyze failed: ${err.message}`);
+  } finally {
+    btnAnalyze.disabled = false;
+  }
+}
+
+// Fetch tracks for table preview
+async function fetchJobTracks(jobId) {
+  if (!jobId) return;
+  try {
+    const res = await fetch(`/api/v1/jobs/${jobId}/tracks`);
+    const data = await res.json();
+    currentTracks = data.tracks || [];
+    renderTable(currentTracks);
+  } catch (err) {
+    console.error("Failed to fetch tracks:", err);
+  }
+}
+
+// Render Tracks Table
+function renderTable(tracks) {
+  tableTrackCount.textContent = `${tracks.length} tracks`;
+  tracksTableBody.innerHTML = "";
+
+  if (tracks.length === 0) {
+    tracksTableBody.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="9">No tracks found or analyzed yet.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  tracks.forEach((t) => {
+    const tr = document.createElement("tr");
+
+    // Formats
+    const lufs = t.integrated_lufs != null ? `${t.integrated_lufs.toFixed(1)} LUFS` : "-";
+    const tp = t.true_peak_dbtp != null ? `${t.true_peak_dbtp.toFixed(1)} dBTP` : "-";
+    const gain = t.target_gain_db != null ? `${t.target_gain_db >= 0 ? '+' : ''}${t.target_gain_db.toFixed(1)} dB` : "-";
+
+    // Limiter badge
+    let limiterBadge = '<span class="badge-limiter-no">No</span>';
+    if (t.limiter_required) {
+      limiterBadge = `<span class="badge-pill badge-limiter-yes">Yes (-${(t.limiter_reduction_db || 0).toFixed(1)}dB)</span>`;
+    }
+
+    // Status / Warning badge
+    let statusBadge = '<span class="badge-pill">Pending</span>';
+    if (t.status === "converted") {
+      statusBadge = '<span class="badge-pill badge-converted">Stabilized</span>';
+    } else if (t.status === "bypassed" || t.bypass_eligible) {
+      statusBadge = '<span class="badge-pill badge-bypass">Bypass</span>';
+    } else if (t.warning_code === "LOUDNESS_UNDER_TARGET") {
+      statusBadge = '<span class="badge-pill badge-warning" title="Limiter reduction capped at 3dB">Cap 3dB</span>';
+    }
+
+    tr.innerHTML = `
+      <td><input type="checkbox" class="track-select" data-id="${t.id}" checked></td>
+      <td style="font-family:var(--font-mono);font-size:0.82rem;" title="${t.relative_path}">${t.relative_path}</td>
+      <td><span class="badge-pill">${t.input_format.toUpperCase()} &rarr; ${t.output_format.toUpperCase()}</span></td>
+      <td class="num">${lufs}</td>
+      <td class="num">${tp}</td>
+      <td class="num" style="color:var(--accent-cyan);font-weight:600;">${gain}</td>
+      <td class="center">${limiterBadge}</td>
+      <td>${statusBadge}</td>
+      <td class="center">
+        <button class="btn-mini btn-reprocess" data-id="${t.id}" title="Reprocess track">Re</button>
+      </td>
+    `;
+    tracksTableBody.appendChild(tr);
+  });
+
+  // Attach per-track reprocess listener
+  document.querySelectorAll(".btn-reprocess").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      const trackId = e.target.getAttribute("data-id");
+      try {
+        await fetch(`/api/v1/tracks/${trackId}/reprocess`, { method: "POST" });
+      } catch (err) {
+        alert("Reprocess request failed");
+      }
+    });
+  });
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll(".track-select").forEach(cb => {
+    cb.checked = checked;
+  });
+  headerSelectAll.checked = checked;
+  selectAllCheckbox.checked = checked;
+}
+
+// Stage 2: Convert
+async function handleConvert() {
+  const selectedCheckboxes = document.querySelectorAll(".track-select:checked");
+  const trackIds = Array.from(selectedCheckboxes).map(cb => cb.getAttribute("data-id"));
+
+  if (trackIds.length === 0) {
+    alert("Please select at least one track to convert.");
+    return;
+  }
+
+  const force = checkForceMode.checked;
+  btnConvert.disabled = true;
+
+  try {
+    const res = await fetch("/api/v1/jobs/convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        track_ids: trackIds,
+        force: force
+      })
+    });
+    if (!res.ok) throw new Error("Conversion failed to start");
+  } catch (err) {
+    alert(`Convert failed: ${err.message}`);
+  } finally {
+    btnConvert.disabled = false;
+  }
+}
