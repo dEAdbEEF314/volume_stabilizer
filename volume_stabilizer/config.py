@@ -5,6 +5,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Automatically load environment variables from .env if present
+load_dotenv()
 
 
 def _env_float(name: str, default: float) -> float:
@@ -18,7 +22,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _resolve_data_dir() -> Path:
-    env_val = os.environ.get("VS_DATA_DIR", "").strip()
+    env_val = os.environ.get("VS_DATA_DIR", "").strip() or os.environ.get("DATA_DIR", "").strip()
     if env_val:
         return Path(env_val).resolve()
     # Default to /data (for Docker), but fallback safely if /data is not writable (for local dev/test)
@@ -57,8 +61,11 @@ def load_config() -> Config:
     default_workers = max(1, cpu - 1)
     workers = _env_int("VS_WORKERS", 0) or default_workers
 
-    input_root = Path(os.environ.get("VS_INPUT_ROOT", "/music")).resolve()
-    output_root = Path(os.environ.get("VS_OUTPUT_ROOT", "/output")).resolve()
+    input_raw = os.environ.get("VS_INPUT_ROOT", "").strip() or os.environ.get("MUSIC_DIR", "/music").strip()
+    output_raw = os.environ.get("VS_OUTPUT_ROOT", "").strip() or os.environ.get("OUTPUT_DIR", "/output").strip()
+
+    input_root = Path(input_raw).resolve()
+    output_root = Path(output_raw).resolve()
     data_dir = _resolve_data_dir()
 
     return Config(

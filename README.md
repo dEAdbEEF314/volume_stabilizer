@@ -34,24 +34,29 @@ EBU R128（Integrated LUFS）に基づく音響解析を行い、元音源を損
 
 ## 🚀 クイックスタート (Docker Compose)
 
-### 1. 起動
+### 1. 設定ファイルの準備 (`.env`)
+
+テンプレート `.env.example` をコピーして `.env` を作成します（パスやポート番号、目標音量などを変更できます）。
+
+```bash
+cp .env.example .env
+```
+
+主な設定項目（`.env` を直接テキストエディタで編集可能）:
+- **`MUSIC_DIR`**: 元音源フォルダ（例: `/volume1/music` (NAS), `./music`）※安全のためコンテナからは読み取り専用
+- **`OUTPUT_DIR`**: 統一音源の出力先フォルダ（例: `/volume1/dj_output`, `./output`）
+- **`DATA_DIR`**: DB/キャッシュ保存先（デフォルト: `./data` ※高速なSSDを推奨）
+- **`PORT`**: Web UI のポート番号（デフォルト: `8080`）
+- **`VS_TARGET_LUFS`**: 目標ラウドネス（デフォルト: `-10.0` LUFS）
+- **`VS_WORKERS`**: 並列ワーカー数（デフォルト: `0` = 自動: CPUコア数 - 1。NAS等でCPU負荷を抑えたい場合は `2` など）
+
+### 2. 起動
 
 ```bash
 docker compose up -d
 ```
 
-起動後、ブラウザで `http://localhost:8080` にアクセスしてください。
-
-### 2. ディレクトリ構成
-
-ホスト側のディレクトリをコンテナにマウントします。
-
-```yaml
-volumes:
-  - /path/to/your/music:/music:ro    # 元音源フォルダ（読み取り専用）
-  - /path/to/your/output:/output    # スタビライズ済み音源の出力先
-  - ./data:/data                    # SQLite DB・解析キャッシュの永続化
-```
+起動後、ブラウザで `http://localhost:8080`（または `.env` で設定したポート）にアクセスしてください。
 
 ---
 

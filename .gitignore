@@ -36,3 +36,4 @@ music/
 output/
 *.tmp
 *.db
+.env
