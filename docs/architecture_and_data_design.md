@@ -257,6 +257,22 @@ def compute_audio_hash(file_path: str) -> str:
 
 ---
 
+
+### 4.6 登録済みトラック一覧取得（パス指定）
+```http
+GET /api/v1/tracks?path=Music_Library/AlbumA
+```
+- レスポンス:
+```json
+{
+  "path": "Music_Library/AlbumA",
+  "total": 12,
+  "stabilized_count": 4,
+  "ready_count": 8,
+  "tracks": [ ... ]
+}
+```
+
 ## 5. WebSocket プロトコル仕様
 
 エンドポイント: `/ws/progress`
@@ -326,3 +342,13 @@ vstab export --job-id=<job_id> --output=report.csv
     - `.track-filename`: 太字、白、省略表示
     - `.track-subpath`: 薄いグレー、小さめフォント、選択ディレクトリからの相対パス
   - 数値列（Format, LUFS, TP, Gain, Limiter, Status, Action）は `px` 単位で固定幅を維持。
+
+
+### 7.3 トラック状態識別とスマート選択設計
+1. **ステータス別の行スタイル**:
+   - `converted` / `bypassed`: `.row-stabilized`（左端グリーンライン、フォント通常）
+   - `unprocessed`: `.row-ready`（通常表示）
+   - `error`: `.row-error`（左端レッドライン）
+2. **スマート選択ルール**:
+   - リスト描画時のチェックボックス初期値: `t.status NOT IN ('converted', 'bypassed')`
+   - 「Select All」クリック時は全件トグル可能。

@@ -779,3 +779,27 @@ input[type="checkbox"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Row Styling for Track Status Identification */
+.data-table tbody tr.row-stabilized td:first-child {
+  border-left: 3px solid var(--accent-green);
+}
+.data-table tbody tr.row-stabilized {
+  background: rgba(0, 230, 118, 0.03);
+}
+.data-table tbody tr.row-stabilized:hover td {
+  background: rgba(0, 230, 118, 0.07) !important;
+}
+
+.data-table tbody tr.row-error td:first-child {
+  border-left: 3px solid var(--accent-red);
+}
+.data-table tbody tr.row-error {
+  background: rgba(255, 23, 68, 0.03);
+}
+
+.badge-ready {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}

@@ -24,3 +24,12 @@ def test_api_serve_index():
     res = client.get("/")
     assert res.status_code == 200
     assert "Volume Stabilizer" in res.text
+
+
+def test_api_list_tracks():
+    res = client.get("/api/v1/tracks")
+    assert res.status_code == 200
+    data = res.json()
+    assert "tracks" in data
+    assert "total" in data
+    assert "stabilized_count" in data

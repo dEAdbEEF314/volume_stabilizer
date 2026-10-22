@@ -64,7 +64,7 @@ async function loadSystemStatus() {
     document.getElementById("stat-target").textContent = `${data.target_lufs.toFixed(1)} LUFS`;
     document.getElementById("stat-ceiling").textContent = `${data.peak_ceiling_dbtp.toFixed(1)} dBTP`;
     document.getElementById("stat-workers").textContent = data.workers;
-    document.getElementById("stat-stabilized").textContent = `${data.stabilized_tracks} / ${data.total_tracks}`;
+    document.getElementById("stat-stabilized").textContent = `${data.stabilized_tracks} tracks`;
   } catch (err) {
     console.error("Failed to load status:", err);
   }
@@ -118,6 +118,9 @@ async function loadDirectoryTree(subpath) {
       });
       folderList.appendChild(item);
     });
+
+    // Auto-sync tracks for the navigated directory
+    loadTracksForCurrentPath();
 
   } catch (err) {
     folderList.innerHTML = `<div style="padding:1rem;color:var(--accent-red);font-size:0.8rem;">Error: ${err.message}</div>`;
@@ -293,12 +296,14 @@ function handleWsEvent(msg) {
       }
     }
 
+    const targetJobId = d.job_id || currentAnalyzeJobId;
     if (d.type === "ANALYZE") {
       const ok = d.succeeded ?? (d.total - errors);
       progressTrackName.textContent = errors
         ? `Completed with errors: ${ok} analyzed, ${errors} failed`
         : `Completed: ${ok} tracks analyzed`;
-      fetchJobTracks(currentAnalyzeJobId);
+      if (targetJobId) fetchJobTracks(targetJobId);
+      loadTracksForCurrentPath();
       step1Badge.classList.remove("active");
       step2Badge.classList.add("active");
       btnConvert.disabled = false;
@@ -308,7 +313,8 @@ function handleWsEvent(msg) {
       if (errors) parts.push(`${errors} failed`);
       progressTrackName.textContent =
         `${errors ? "Completed with errors" : "Completed"}: ${parts.join(", ")}`;
-      fetchJobTracks(currentAnalyzeJobId);
+      if (targetJobId) fetchJobTracks(targetJobId);
+      loadTracksForCurrentPath();
     }
 
     if (errors) {
@@ -320,6 +326,30 @@ function handleWsEvent(msg) {
     } else {
       progressHideTimer = setTimeout(hideProgress, 4000);
     }
+  }
+}
+
+
+// Load existing tracks for the current selected folder from DB
+async function loadTracksForCurrentPath() {
+  try {
+    const res = await fetch(`/api/v1/tracks?path=${encodeURIComponent(currentPath)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    currentTracks = data.tracks || [];
+    renderTable(currentTracks);
+
+    if (currentTracks.length > 0) {
+      step1Badge.classList.remove("active");
+      step2Badge.classList.add("active");
+      btnConvert.disabled = false;
+    } else {
+      step1Badge.classList.add("active");
+      step2Badge.classList.remove("active");
+      btnConvert.disabled = true;
+    }
+  } catch (err) {
+    console.error("Failed to load tracks for path:", err);
   }
 }
 
@@ -364,13 +394,21 @@ async function fetchJobTracks(jobId) {
 
 // Render Tracks Table
 function renderTable(tracks) {
-  tableTrackCount.textContent = `${tracks.length} tracks`;
+  const stabilizedCount = tracks.filter(t => t.status === "converted" || t.status === "bypassed").length;
+  const readyCount = tracks.length - stabilizedCount;
+
+  if (tracks.length > 0) {
+    tableTrackCount.innerHTML = `${tracks.length} tracks <span style="font-size:0.75rem;color:var(--text-muted);font-weight:400;">(${readyCount} ready, <strong style="color:var(--accent-green);">${stabilizedCount} stabilized</strong>)</span>`;
+  } else {
+    tableTrackCount.textContent = "0 tracks";
+  }
+
   tracksTableBody.innerHTML = "";
 
   if (tracks.length === 0) {
     tracksTableBody.innerHTML = `
       <tr class="empty-row">
-        <td colspan="9">No tracks found or analyzed yet.</td>
+        <td colspan="9">No tracks analyzed in this folder yet. Click <strong>Analyze Folder</strong> to preview loudness.</td>
       </tr>
     `;
     return;
@@ -378,6 +416,16 @@ function renderTable(tracks) {
 
   tracks.forEach((t) => {
     const tr = document.createElement("tr");
+
+    const isStabilized = t.status === "converted";
+    const isBypassed = t.status === "bypassed";
+    const isProcessed = isStabilized || isBypassed;
+
+    if (isProcessed) {
+      tr.className = "row-stabilized";
+    } else if (t.status === "error") {
+      tr.className = "row-error";
+    }
 
     // Formats
     const lufs = t.integrated_lufs != null ? `${t.integrated_lufs.toFixed(1)} LUFS` : "-";
@@ -390,14 +438,16 @@ function renderTable(tracks) {
       limiterBadge = `<span class="badge-pill badge-limiter-yes">Yes (-${(t.limiter_reduction_db || 0).toFixed(1)}dB)</span>`;
     }
 
-    // Status / Warning badge
-    let statusBadge = '<span class="badge-pill">Pending</span>';
+    // Status badge: clear distinction
+    let statusBadge = '<span class="badge-pill badge-ready">Ready</span>';
     if (t.status === "error") {
-      statusBadge = '<span class="badge-pill badge-error" title="Last conversion failed (see progress panel / server log)">Error</span>';
-    } else if (t.status === "converted") {
-      statusBadge = '<span class="badge-pill badge-converted">Stabilized</span>';
-    } else if (t.status === "bypassed" || t.bypass_eligible) {
-      statusBadge = '<span class="badge-pill badge-bypass">Bypass</span>';
+      statusBadge = '<span class="badge-pill badge-error" title="Last conversion failed (see progress panel / server log)">✕ Error</span>';
+    } else if (isStabilized) {
+      statusBadge = '<span class="badge-pill badge-converted" title="Stabilization completed">✓ Stabilized</span>';
+    } else if (isBypassed) {
+      statusBadge = '<span class="badge-pill badge-bypass" title="Bypassed (bit-perfect stream copy)">⚡ Bypassed</span>';
+    } else if (t.bypass_eligible) {
+      statusBadge = '<span class="badge-pill badge-bypass" title="Eligible for bit-perfect bypass">Bypass Eligible</span>';
     } else if (t.warning_code === "LOUDNESS_UNDER_TARGET") {
       statusBadge = '<span class="badge-pill badge-warning" title="Limiter reduction capped at 3dB">Cap 3dB</span>';
     }
@@ -417,7 +467,7 @@ function renderTable(tracks) {
     }
 
     tr.innerHTML = `
-      <td><input type="checkbox" class="track-select" data-id="${t.id}" checked></td>
+      <td><input type="checkbox" class="track-select" data-id="${t.id}" ${isProcessed ? "" : "checked"}></td>
       <td>
         <div class="track-path-cell" title="${escapeHtml(fullPath)}">
           <span class="track-filename">${escapeHtml(filename)}</span>

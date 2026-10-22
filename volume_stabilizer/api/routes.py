@@ -89,6 +89,37 @@ def get_directory_tree(path: str = Query("", description="Relative path inside /
     }
 
 
+@router.get("/tracks")
+def list_tracks(
+    path: str = Query("", description="Relative subpath in /music"),
+    cfg: Config = Depends(get_cfg),
+):
+    init_db(cfg.db_path)
+    with get_connection(cfg.db_path) as conn:
+        like_pattern = f"{path}%" if path else "%"
+        cur = conn.execute(
+            """
+            SELECT t.id, t.relative_path, t.input_format, t.output_format, t.status,
+                   a.integrated_lufs, a.true_peak_dbtp, a.lra_lu, a.target_gain_db,
+                   a.limiter_required, a.limiter_reduction_db, a.bypass_eligible, a.warning_code
+            FROM tracks t
+            LEFT JOIN analysis_results a ON t.id = a.track_id
+            WHERE t.relative_path LIKE ?
+            ORDER BY t.relative_path ASC
+            """,
+            (like_pattern,),
+        )
+        tracks = [dict(r) for r in cur.fetchall()]
+
+    stabilized_count = sum(1 for t in tracks if t.get("status") in ("converted", "bypassed"))
+    return {
+        "path": path,
+        "total": len(tracks),
+        "stabilized_count": stabilized_count,
+        "tracks": tracks,
+    }
+
+
 @router.post("/jobs/analyze")
 def start_analyze_job(
     req: AnalyzeRequest,
