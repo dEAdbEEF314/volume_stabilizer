@@ -262,7 +262,15 @@ function handleWsEvent(msg) {
     progressBarFill.classList.remove("indeterminate");
     progressPercentage.textContent = `${d.percent}%`;
     progressBarFill.style.width = `${d.percent}%`;
-    progressTrackName.textContent = d.track || "Processing...";
+
+    // Smart path display: shorten if within currentPath (Proposal 2-C)
+    let trackDisplay = d.track || "Processing...";
+    if (currentPath && trackDisplay.startsWith(currentPath)) {
+      trackDisplay = trackDisplay.substring(currentPath.length).replace(/^\/+/, "");
+    }
+    progressTrackName.textContent = trackDisplay;
+    progressTrackName.title = d.track || "";
+
     progressCount.textContent = `${d.processed} / ${d.total}`;
     setErrorCount(d.errors);
     if (d.status === "error") appendError(d.error);
