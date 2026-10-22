@@ -35,7 +35,7 @@ def detect_audio_codec(file_path: Path) -> str:
         "-of", "json",
         str(file_path),
     ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
     if res.returncode != 0:
         # Fallback to extension heuristic
         ext = file_path.suffix.lower()

@@ -29,7 +29,7 @@ def process_audio(
             "-map_metadata", "-1",
             str(output_path),
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
         if res.returncode != 0:
             raise RuntimeError(f"Bypass stream copy failed: {res.stderr}")
         return
@@ -76,6 +76,6 @@ def process_audio(
         str(output_path),
     ]
 
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
     if res.returncode != 0:
         raise RuntimeError(f"Audio encoding failed: {res.stderr}")

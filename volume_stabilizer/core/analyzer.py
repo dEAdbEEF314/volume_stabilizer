@@ -39,7 +39,7 @@ def analyze_track(
         "-",
     ]
 
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
     stderr = proc.stderr
 
     i_match = re.search(r"Integrated loudness:.*?I:\s*([-\d.]+)\s*LUFS", stderr, re.DOTALL)
