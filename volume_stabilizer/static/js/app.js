@@ -24,6 +24,13 @@ const progressBarFill = document.getElementById("progress-bar-fill");
 const jobStatusTag = document.getElementById("job-status-tag");
 const step1Badge = document.getElementById("step-1-badge");
 const step2Badge = document.getElementById("step-2-badge");
+const progressCount = document.getElementById("progress-count");
+const progressErrorCount = document.getElementById("progress-error-count");
+const btnProgressClose = document.getElementById("btn-progress-close");
+const errorPanel = document.getElementById("error-panel");
+const errorPanelSummary = document.getElementById("error-panel-summary");
+const errorList = document.getElementById("error-list");
+let progressHideTimer = null;
 
 // Initialize
 document.addEventListener("DOMContentLoaded", () => {
@@ -38,6 +45,7 @@ document.addEventListener("DOMContentLoaded", () => {
     window.location.href = "/api/v1/reports/export";
   });
 
+  btnProgressClose.addEventListener("click", hideProgress);
   headerSelectAll.addEventListener("change", (e) => toggleSelectAll(e.target.checked));
   selectAllCheckbox.addEventListener("change", (e) => toggleSelectAll(e.target.checked));
 });
@@ -130,35 +138,110 @@ function initWebSocket() {
   };
 }
 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function hideProgress() {
+  if (progressHideTimer) clearTimeout(progressHideTimer);
+  progressHideTimer = null;
+  progressContainer.style.display = "none";
+}
+
+function resetProgress(type, total) {
+  if (progressHideTimer) clearTimeout(progressHideTimer);
+  progressHideTimer = null;
+  progressContainer.style.display = "block";
+  progressContainer.classList.remove("has-errors");
+  jobStatusTag.textContent = type;
+  progressPercentage.textContent = "0%";
+  progressBarFill.style.width = "0%";
+  progressTrackName.textContent = "Starting...";
+  progressCount.textContent = `0 / ${total ?? 0}`;
+  progressErrorCount.hidden = true;
+  progressErrorCount.textContent = "0 errors";
+  btnProgressClose.hidden = true;
+  errorPanel.hidden = true;
+  errorPanel.open = false;
+  errorList.innerHTML = "";
+}
+
+function setErrorCount(n) {
+  if (!n) return;
+  progressErrorCount.hidden = false;
+  progressErrorCount.textContent = `${n} error${n === 1 ? "" : "s"}`;
+  progressContainer.classList.add("has-errors");
+}
+
+function appendError(err) {
+  if (!err) return;
+  errorPanel.hidden = false;
+  const li = document.createElement("li");
+  li.innerHTML = `
+    <span class="err-track" title="${escapeHtml(err.track)}">&lrm;${escapeHtml(err.track)}&lrm;</span>
+    <span class="err-msg">${escapeHtml(err.message)}</span>
+  `;
+  errorList.appendChild(li);
+  errorPanelSummary.textContent = `Failed tracks (${errorList.children.length})`;
+}
+
 function handleWsEvent(msg) {
   if (msg.event === "JOB_STARTED") {
-    progressContainer.style.display = "block";
-    jobStatusTag.textContent = msg.data.type;
-    progressPercentage.textContent = "0%";
-    progressBarFill.style.width = "0%";
+    resetProgress(msg.data.type, msg.data.total);
   } else if (msg.event === "JOB_PROGRESS") {
     const d = msg.data;
     progressPercentage.textContent = `${d.percent}%`;
     progressBarFill.style.width = `${d.percent}%`;
     progressTrackName.textContent = d.track || "Processing...";
+    progressCount.textContent = `${d.processed} / ${d.total}`;
+    setErrorCount(d.errors);
+    if (d.status === "error") appendError(d.error);
   } else if (msg.event === "JOB_COMPLETED") {
+    const d = msg.data;
+    const errors = d.errors || 0;
     progressPercentage.textContent = "100%";
     progressBarFill.style.width = "100%";
-    progressTrackName.textContent = "Completed successfully!";
     loadSystemStatus();
 
-    if (msg.data.type === "ANALYZE") {
+    // Rebuild the error list from the authoritative final report
+    if (Array.isArray(d.error_list) && d.error_list.length) {
+      errorList.innerHTML = "";
+      d.error_list.forEach(appendError);
+      if (errors > d.error_list.length) {
+        errorPanelSummary.textContent =
+          `Failed tracks (showing ${d.error_list.length} of ${errors}, see server log for the rest)`;
+      }
+    }
+
+    if (d.type === "ANALYZE") {
+      const ok = d.succeeded ?? (d.total - errors);
+      progressTrackName.textContent = errors
+        ? `Completed with errors: ${ok} analyzed, ${errors} failed`
+        : `Completed: ${ok} tracks analyzed`;
       fetchJobTracks(currentAnalyzeJobId);
       step1Badge.classList.remove("active");
       step2Badge.classList.add("active");
       btnConvert.disabled = false;
-    } else if (msg.data.type === "CONVERT") {
+    } else if (d.type === "CONVERT") {
+      const parts = [`${d.converted || 0} converted`, `${d.bypassed || 0} bypassed`];
+      if (d.skipped) parts.push(`${d.skipped} skipped`);
+      if (errors) parts.push(`${errors} failed`);
+      progressTrackName.textContent =
+        `${errors ? "Completed with errors" : "Completed"}: ${parts.join(", ")}`;
       fetchJobTracks(currentAnalyzeJobId);
     }
 
-    setTimeout(() => {
-      progressContainer.style.display = "none";
-    }, 4000);
+    if (errors) {
+      // Keep the card visible so failures are not missed
+      setErrorCount(errors);
+      jobStatusTag.textContent = `${d.type} ⚠`;
+      btnProgressClose.hidden = false;
+      errorPanel.open = true;
+    } else {
+      progressHideTimer = setTimeout(hideProgress, 4000);
+    }
   }
 }
 
@@ -225,7 +308,9 @@ function renderTable(tracks) {
 
     // Status / Warning badge
     let statusBadge = '<span class="badge-pill">Pending</span>';
-    if (t.status === "converted") {
+    if (t.status === "error") {
+      statusBadge = '<span class="badge-pill badge-error" title="Last conversion failed (see progress panel / server log)">Error</span>';
+    } else if (t.status === "converted") {
       statusBadge = '<span class="badge-pill badge-converted">Stabilized</span>';
     } else if (t.status === "bypassed" || t.bypass_eligible) {
       statusBadge = '<span class="badge-pill badge-bypass">Bypass</span>';

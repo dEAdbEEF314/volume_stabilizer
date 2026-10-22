@@ -93,6 +93,15 @@
           <div class="progress-bar-track">
             <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%;"></div>
           </div>
+          <div class="progress-counters">
+            <span id="progress-count">0 / 0</span>
+            <span class="counter-error" id="progress-error-count" hidden>0 errors</span>
+            <button id="btn-progress-close" class="btn-mini" hidden>Close</button>
+          </div>
+          <details class="error-panel" id="error-panel" hidden>
+            <summary id="error-panel-summary">Failed tracks</summary>
+            <ul class="error-list" id="error-list"></ul>
+          </details>
         </div>
 
         <!-- Track Table Card -->

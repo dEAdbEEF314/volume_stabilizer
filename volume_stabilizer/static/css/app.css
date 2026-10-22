@@ -604,3 +604,93 @@ input[type="checkbox"] {
   accent-color: var(--accent-cyan);
   cursor: pointer;
 }
+
+/* Progress counters & error reporting */
+.progress-counters {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.progress-counters .btn-mini {
+  margin-left: auto;
+}
+
+.counter-error {
+  color: var(--accent-red);
+  font-weight: 700;
+}
+
+.progress-card.has-errors {
+  border-color: var(--accent-red);
+  box-shadow: 0 0 24px var(--accent-red-glow);
+  animation: none;
+}
+
+.progress-card.has-errors .job-status-tag {
+  background: var(--accent-red);
+  color: #fff;
+}
+
+.progress-card.has-errors .progress-bar-fill {
+  background: linear-gradient(90deg, #ff9100, #ff1744);
+}
+
+.error-panel {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 0.6rem;
+}
+
+.error-panel summary {
+  cursor: pointer;
+  color: var(--accent-red);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.error-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.error-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.15rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.error-list li:nth-child(odd) {
+  background: rgba(255, 23, 68, 0.06);
+}
+
+.error-list .err-track {
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.error-list .err-msg {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.badge-error {
+  background: rgba(255, 23, 68, 0.15);
+  color: var(--accent-red);
+  border: 1px solid rgba(255, 23, 68, 0.3);
+}

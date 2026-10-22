@@ -21,6 +21,14 @@ from volume_stabilizer.api.websocket import ws_manager
 
 logger = logging.getLogger(__name__)
 
+MAX_REPORTED_ERRORS = 200
+
+
+def _short_error(e: Exception, limit: int = 300) -> str:
+    """Compact single-line error message suitable for the UI."""
+    msg = " ".join(str(e).split()) or e.__class__.__name__
+    return msg if len(msg) <= limit else msg[: limit - 1] + "…"
+
 
 def _worker_analyze_track(
     input_path_str: str,
@@ -119,6 +127,8 @@ class JobManager:
         tracks: List[ScannedTrack] = list(scan_directory(self.cfg.input_root, self.cfg.output_root, subpath))
         total = len(tracks)
         processed = 0
+        error_count = 0
+        errors: list[dict] = []
 
         self.repo.update_job_progress(job_id, total, 0, 0, 0, 0, 0, status="RUNNING")
         await ws_manager.broadcast({
@@ -165,7 +175,9 @@ class JobManager:
                 )
 
                 processed += 1
-                self.repo.update_job_progress(job_id, total, processed, processed, 0, 0, 0)
+                self.repo.update_job_progress(
+                    job_id, total, processed, processed - error_count, 0, 0, error_count
+                )
                 await ws_manager.broadcast({
                     "event": "JOB_PROGRESS",
                     "data": {
@@ -174,16 +186,48 @@ class JobManager:
                         "total": total,
                         "percent": round((processed / total) * 100, 1) if total else 100,
                         "track": str(t.relative_path),
+                        "status": "analyzed",
+                        "errors": error_count,
                         "analysis": analysis_dict,
                     }
                 })
             except Exception as e:
                 logger.error(f"Error analyzing {t.input_path}: {e}")
+                processed += 1
+                error_count += 1
+                err = {"track": str(t.relative_path), "message": _short_error(e)}
+                if len(errors) < MAX_REPORTED_ERRORS:
+                    errors.append(err)
+                self.repo.update_job_progress(
+                    job_id, total, processed, processed - error_count, 0, 0, error_count
+                )
+                await ws_manager.broadcast({
+                    "event": "JOB_PROGRESS",
+                    "data": {
+                        "job_id": job_id,
+                        "processed": processed,
+                        "total": total,
+                        "percent": round((processed / total) * 100, 1) if total else 100,
+                        "track": str(t.relative_path),
+                        "status": "error",
+                        "errors": error_count,
+                        "error": err,
+                    }
+                })
 
-        self.repo.update_job_progress(job_id, total, processed, processed, 0, 0, 0, status="COMPLETED")
+        self.repo.update_job_progress(
+            job_id, total, processed, processed - error_count, 0, 0, error_count, status="COMPLETED"
+        )
         await ws_manager.broadcast({
             "event": "JOB_COMPLETED",
-            "data": {"job_id": job_id, "type": "ANALYZE", "total": total}
+            "data": {
+                "job_id": job_id,
+                "type": "ANALYZE",
+                "total": total,
+                "succeeded": processed - error_count,
+                "errors": error_count,
+                "error_list": errors,
+            }
         })
 
     async def run_convert_job(
@@ -198,6 +242,7 @@ class JobManager:
         bypass_count = 0
         skipped_count = 0
         error_count = 0
+        errors: list[dict] = []
 
         self.repo.update_job_progress(job_id, total, 0, 0, 0, 0, 0, status="RUNNING")
         await ws_manager.broadcast({
@@ -210,11 +255,19 @@ class JobManager:
         for tid in track_ids:
             t = self.repo.get_track_by_id(tid)
             if not t:
+                error_count += 1
+                processed += 1
+                if len(errors) < MAX_REPORTED_ERRORS:
+                    errors.append({"track": tid, "message": "Track not found in database"})
                 continue
 
             analysis_rec = self.repo.get_analysis(tid)
             if not analysis_rec:
                 # Need analysis first
+                error_count += 1
+                processed += 1
+                if len(errors) < MAX_REPORTED_ERRORS:
+                    errors.append({"track": t.relative_path, "message": "Not analyzed yet (run Analyze first)"})
                 continue
 
             out_p = Path(t.output_path)
@@ -257,12 +310,36 @@ class JobManager:
                         "percent": round((processed / total) * 100, 1) if total else 100,
                         "track": t.relative_path,
                         "status": status,
+                        "errors": error_count,
                     }
                 })
             except Exception as e:
                 logger.error(f"Error converting {t.input_path}: {e}")
                 error_count += 1
                 processed += 1
+                err = {"track": t.relative_path, "message": _short_error(e)}
+                if len(errors) < MAX_REPORTED_ERRORS:
+                    errors.append(err)
+                try:
+                    self.repo.update_track_status(t.id, "error")
+                except Exception:
+                    logger.exception("Failed to mark track as error")
+                self.repo.update_job_progress(
+                    job_id, total, processed, converted_count, bypass_count, 0, error_count
+                )
+                await ws_manager.broadcast({
+                    "event": "JOB_PROGRESS",
+                    "data": {
+                        "job_id": job_id,
+                        "processed": processed,
+                        "total": total,
+                        "percent": round((processed / total) * 100, 1) if total else 100,
+                        "track": t.relative_path,
+                        "status": "error",
+                        "errors": error_count,
+                        "error": err,
+                    }
+                })
 
         self.repo.update_job_progress(
             job_id, total, processed, converted_count, bypass_count, 0, error_count, status="COMPLETED"
@@ -276,5 +353,6 @@ class JobManager:
                 "bypassed": bypass_count,
                 "skipped": skipped_count,
                 "errors": error_count,
+                "error_list": errors,
             }
         })
