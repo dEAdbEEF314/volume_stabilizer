@@ -308,14 +308,24 @@ function handleWsEvent(msg) {
       step2Badge.classList.add("active");
       btnConvert.disabled = false;
     } else if (d.type === "CONVERT") {
-      const parts = [`${d.converted || 0} converted`, `${d.bypassed || 0} bypassed`];
+      const parts = [];
+      if (d.converted) parts.push(`${d.converted} converted`);
+      if (d.bypassed) parts.push(`${d.bypassed} bypassed`);
       if (d.skipped) parts.push(`${d.skipped} skipped`);
       if (errors) parts.push(`${errors} failed`);
-      progressTrackName.textContent =
-        `${errors ? "Completed with errors" : "Completed"}: ${parts.join(", ")}`;
+
+      if (d.converted === 0 && d.bypassed === 0 && d.skipped > 0 && errors === 0) {
+        progressTrackName.textContent = `All ${d.skipped} tracks already stabilized (skipped). Enable "Force Reprocess" to re-encode.`;
+      } else {
+        progressTrackName.textContent =
+          `${errors ? "Completed with errors" : "Completed"}: ${parts.join(", ") || "No tracks processed"}`;
+      }
       if (targetJobId) fetchJobTracks(targetJobId);
       loadTracksForCurrentPath();
     }
+
+    btnAnalyze.disabled = false;
+    btnConvert.disabled = false;
 
     if (errors) {
       // Keep the card visible so failures are not missed
@@ -356,7 +366,12 @@ async function loadTracksForCurrentPath() {
 // Stage 1: Analyze
 async function handleAnalyze() {
   const force = checkForceMode.checked;
+  if (progressHideTimer) {
+    clearTimeout(progressHideTimer);
+    progressHideTimer = null;
+  }
   btnAnalyze.disabled = true;
+  btnConvert.disabled = true;
 
   // Immediate visual feedback (Proposal 1-C)
   resetProgress("PREPARING", 0);
@@ -373,9 +388,9 @@ async function handleAnalyze() {
     currentAnalyzeJobId = data.job_id;
   } catch (err) {
     alert(`Analyze failed: ${err.message}`);
-    hideProgress();
-  } finally {
     btnAnalyze.disabled = false;
+    btnConvert.disabled = false;
+    hideProgress();
   }
 }
 
@@ -487,6 +502,13 @@ function renderTable(tracks) {
     tracksTableBody.appendChild(tr);
   });
 
+  // Sync header select-all with whether any/all tracks are checked
+  const allBoxes = document.querySelectorAll(".track-select");
+  const checkedBoxes = document.querySelectorAll(".track-select:checked");
+  const allChecked = allBoxes.length > 0 && allBoxes.length === checkedBoxes.length;
+  if (headerSelectAll) headerSelectAll.checked = allChecked;
+  if (selectAllCheckbox) selectAllCheckbox.checked = allChecked;
+
   // Attach per-track reprocess listener
   document.querySelectorAll(".btn-reprocess").forEach(btn => {
     btn.addEventListener("click", async (e) => {
@@ -510,16 +532,37 @@ function toggleSelectAll(checked) {
 
 // Stage 2: Convert
 async function handleConvert() {
-  const selectedCheckboxes = document.querySelectorAll(".track-select:checked");
-  const trackIds = Array.from(selectedCheckboxes).map(cb => cb.getAttribute("data-id"));
+  let selectedCheckboxes = document.querySelectorAll(".track-select:checked");
+  let trackIds = Array.from(selectedCheckboxes).map(cb => cb.getAttribute("data-id"));
+
+  // If no track is checked, auto-select ready (unprocessed) tracks
+  if (trackIds.length === 0) {
+    const readyBoxes = document.querySelectorAll("tr:not(.row-stabilized) .track-select");
+    if (readyBoxes.length > 0) {
+      readyBoxes.forEach(cb => { cb.checked = true; });
+      selectedCheckboxes = document.querySelectorAll(".track-select:checked");
+      trackIds = Array.from(selectedCheckboxes).map(cb => cb.getAttribute("data-id"));
+    }
+  }
 
   if (trackIds.length === 0) {
-    alert("Please select at least one track to convert.");
+    alert("All tracks in this folder are already stabilized.\nTo reprocess them, check 'Select All' or enable 'Force Reprocess'.");
     return;
   }
 
   const force = checkForceMode.checked;
+
+  if (progressHideTimer) {
+    clearTimeout(progressHideTimer);
+    progressHideTimer = null;
+  }
   btnConvert.disabled = true;
+  btnAnalyze.disabled = true;
+
+  // Immediate visual feedback for convert job
+  resetProgress("CONVERT", trackIds.length);
+  progressTrackName.textContent = `Preparing stabilization for ${trackIds.length} tracks...`;
+  progressBarFill.style.width = "0%";
 
   try {
     const res = await fetch("/api/v1/jobs/convert", {
@@ -533,7 +576,8 @@ async function handleConvert() {
     if (!res.ok) throw new Error("Conversion failed to start");
   } catch (err) {
     alert(`Convert failed: ${err.message}`);
-  } finally {
     btnConvert.disabled = false;
+    btnAnalyze.disabled = false;
+    hideProgress();
   }
 }
