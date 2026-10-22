@@ -307,3 +307,22 @@ vstab inspect <file_path>
 # 5. 結果レポートのCSV出力
 vstab export --job-id=<job_id> --output=report.csv
 ```
+
+---
+
+## 7. UI応答性 ＆ レイアウト堅牢化設計（提案1・提案2対応）
+
+### 7.1 非同期スキャンパイプライン
+1. **FastAPI BackgroundTask**: スキャンタスクを非同期ワーカースレッド（`run_in_executor`）へ委譲。
+2. **高速走査**: `os.scandir` / `Path.iterdir` による再帰走査を行い、拡張子マッチのみで高速にファイルリストを構築。
+3. **プログレッシブ配信**: スキャン中 250ms おきに `JOB_SCANNING` を WebSocket 送信。
+4. **並列コーデック解析**: `ScannedTrack` の詳細情報（ffprobe）は、スキャン後ではなく並列解析ワーカースレッドが各ファイルを処理する直前に取得。
+
+### 7.2 UIオーバーフロー保護設計
+- **Progress Card**: `.progress-track-label` に `min-width: 0`、`flex: 1`、`text-overflow: ellipsis`。
+- **Tracks Table**:
+  - `table-layout: fixed; width: 100%;`
+  - パス列は 2段組セル（`.track-path-cell`）:
+    - `.track-filename`: 太字、白、省略表示
+    - `.track-subpath`: 薄いグレー、小さめフォント、選択ディレクトリからの相対パス
+  - 数値列（Format, LUFS, TP, Gain, Limiter, Status, Action）は `px` 単位で固定幅を維持。
