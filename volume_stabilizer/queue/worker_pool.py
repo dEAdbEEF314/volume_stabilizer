@@ -44,6 +44,33 @@ def _worker_analyze_track(
     return audio_hash, asdict(analysis)
 
 
+def _analysis_record_to_dict(rec, peak_ceiling_dbtp: float) -> dict:
+    """Convert a DB AnalysisRecord into kwargs for LoudnessAnalysis.
+
+    AnalysisRecord carries DB-only fields (track_id, analyzed_at) and does not
+    persist effective_gain_db, so it is reconstructed here from the stored
+    (already capped) limiter reduction.
+    """
+    target_gain = rec.target_gain_db
+    effective_gain = target_gain
+    if rec.limiter_required:
+        predicted_tp = rec.true_peak_dbtp + target_gain
+        excess = (predicted_tp - peak_ceiling_dbtp) - rec.limiter_reduction_db
+        if excess > 0:
+            effective_gain = target_gain - excess
+    return {
+        "integrated_lufs": rec.integrated_lufs,
+        "true_peak_dbtp": rec.true_peak_dbtp,
+        "lra_lu": rec.lra_lu,
+        "target_gain_db": target_gain,
+        "limiter_required": bool(rec.limiter_required),
+        "limiter_reduction_db": rec.limiter_reduction_db,
+        "effective_gain_db": effective_gain,
+        "bypass_eligible": bool(rec.bypass_eligible),
+        "warning_code": rec.warning_code,
+    }
+
+
 def _worker_convert_track(
     input_path_str: str,
     output_path_str: str,
@@ -205,7 +232,7 @@ class JobManager:
                     t.input_path,
                     t.output_path,
                     t.output_format,
-                    asdict(analysis_rec),
+                    _analysis_record_to_dict(analysis_rec, self.cfg.peak_ceiling_dbtp),
                     force,
                     str(self.cfg.backup_dir),
                     self.cfg.peak_ceiling_dbtp,
