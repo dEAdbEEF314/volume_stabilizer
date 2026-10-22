@@ -504,6 +504,8 @@ body {
 }
 
 .data-table {
+  table-layout: fixed;
+  width: 100%;
   width: 100%;
   border-collapse: collapse;
   font-size: 0.88rem;
@@ -693,4 +695,69 @@ input[type="checkbox"] {
   background: rgba(255, 23, 68, 0.15);
   color: var(--accent-red);
   border: 1px solid rgba(255, 23, 68, 0.3);
+}
+
+/* Scanning indeterminate progress bar animation (Proposal 1-B) */
+.progress-bar-fill.indeterminate {
+  width: 100% !important;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 229, 255, 0.2) 0%,
+    rgba(0, 229, 255, 0.8) 50%,
+    rgba(0, 229, 255, 0.2) 100%
+  ) !important;
+  background-size: 200% 100% !important;
+  animation: scan-indeterminate 1.5s infinite linear;
+}
+
+@keyframes scan-indeterminate {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Timer and Heartbeat Warning (Proposal 1-C, 1-D) */
+.progress-timer {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.5rem;
+}
+
+.counter-warning {
+  color: var(--accent-yellow);
+  font-weight: 600;
+  animation: pulse-warn 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-warn {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+/* 2-Row Track Path Display (Proposal 2-A, 2-B, 2-C) */
+.track-path-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  overflow: hidden;
+  min-width: 0;
+  padding: 0.2rem 0;
+}
+
+.track-filename {
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-subfolder {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

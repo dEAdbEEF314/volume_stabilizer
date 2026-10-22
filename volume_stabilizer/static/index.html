@@ -95,6 +95,8 @@
           </div>
           <div class="progress-counters">
             <span id="progress-count">0 / 0</span>
+            <span class="progress-timer" id="progress-timer">00:00</span>
+            <span class="counter-warning" id="progress-heartbeat-warning" hidden></span>
             <span class="counter-error" id="progress-error-count" hidden>0 errors</span>
             <button id="btn-progress-close" class="btn-mini" hidden>Close</button>
           </div>
@@ -124,7 +126,7 @@
               <thead>
                 <tr>
                   <th width="40"><input type="checkbox" id="header-select-all" checked></th>
-                  <th>Relative Path</th>
+                  <th>Track / Path</th>
                   <th width="80">Format</th>
                   <th width="100" class="num">LUFS</th>
                   <th width="100" class="num">True Peak</th>

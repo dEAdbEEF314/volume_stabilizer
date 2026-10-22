@@ -25,12 +25,18 @@ const jobStatusTag = document.getElementById("job-status-tag");
 const step1Badge = document.getElementById("step-1-badge");
 const step2Badge = document.getElementById("step-2-badge");
 const progressCount = document.getElementById("progress-count");
+const progressTimer = document.getElementById("progress-timer");
+const progressHeartbeatWarning = document.getElementById("progress-heartbeat-warning");
 const progressErrorCount = document.getElementById("progress-error-count");
 const btnProgressClose = document.getElementById("btn-progress-close");
 const errorPanel = document.getElementById("error-panel");
 const errorPanelSummary = document.getElementById("error-panel-summary");
 const errorList = document.getElementById("error-list");
 let progressHideTimer = null;
+let jobStartTime = null;
+let timerInterval = null;
+let lastWsMessageTime = null;
+let heartbeatInterval = null;
 
 // Initialize
 document.addEventListener("DOMContentLoaded", () => {
@@ -144,7 +150,53 @@ function escapeHtml(str) {
   }[c]));
 }
 
+
+function formatDuration(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function startJobTimer() {
+  stopJobTimer();
+  jobStartTime = Date.now();
+  lastWsMessageTime = Date.now();
+  if (progressTimer) progressTimer.textContent = "00:00";
+  if (progressHeartbeatWarning) progressHeartbeatWarning.hidden = true;
+
+  timerInterval = setInterval(() => {
+    if (!jobStartTime) return;
+    const elapsedSec = (Date.now() - jobStartTime) / 1000;
+    if (progressTimer) progressTimer.textContent = formatDuration(elapsedSec);
+  }, 1000);
+
+  heartbeatInterval = setInterval(() => {
+    if (!lastWsMessageTime || !progressHeartbeatWarning) return;
+    const quietSec = (Date.now() - lastWsMessageTime) / 1000;
+    if (quietSec >= 10) {
+      progressHeartbeatWarning.hidden = false;
+      progressHeartbeatWarning.textContent = `⚠ I/O wait (${Math.floor(quietSec)}s ago)`;
+    } else {
+      progressHeartbeatWarning.hidden = true;
+    }
+  }, 1000);
+}
+
+function stopJobTimer() {
+  if (timerInterval) clearInterval(timerInterval);
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  timerInterval = null;
+  heartbeatInterval = null;
+  if (progressHeartbeatWarning) progressHeartbeatWarning.hidden = true;
+}
+
+function recordWsActivity() {
+  lastWsMessageTime = Date.now();
+  if (progressHeartbeatWarning) progressHeartbeatWarning.hidden = true;
+}
+
 function hideProgress() {
+  stopJobTimer();
   if (progressHideTimer) clearTimeout(progressHideTimer);
   progressHideTimer = null;
   progressContainer.style.display = "none";
@@ -155,6 +207,7 @@ function resetProgress(type, total) {
   progressHideTimer = null;
   progressContainer.style.display = "block";
   progressContainer.classList.remove("has-errors");
+  progressBarFill.classList.remove("indeterminate");
   jobStatusTag.textContent = type;
   progressPercentage.textContent = "0%";
   progressBarFill.style.width = "0%";
@@ -166,6 +219,7 @@ function resetProgress(type, total) {
   errorPanel.hidden = true;
   errorPanel.open = false;
   errorList.innerHTML = "";
+  startJobTimer();
 }
 
 function setErrorCount(n) {
@@ -188,10 +242,24 @@ function appendError(err) {
 }
 
 function handleWsEvent(msg) {
-  if (msg.event === "JOB_STARTED") {
+  recordWsActivity();
+
+  if (msg.event === "JOB_SCANNING") {
+    const d = msg.data;
+    if (!timerInterval) startJobTimer();
+    progressContainer.style.display = "block";
+    jobStatusTag.textContent = "SCANNING";
+    progressBarFill.classList.add("indeterminate");
+    progressPercentage.textContent = d.folders_scanned ? `${d.folders_scanned} dirs` : "";
+    progressTrackName.textContent = `Scanning: ${d.folders_scanned} folders, ${d.audio_found} audio files found...`;
+    progressCount.textContent = `${d.audio_found} tracks`;
+  } else if (msg.event === "JOB_STARTED") {
+    progressBarFill.classList.remove("indeterminate");
     resetProgress(msg.data.type, msg.data.total);
+    progressTrackName.textContent = msg.data.total ? `Analyzing ${msg.data.total} tracks...` : "Preparing analysis...";
   } else if (msg.event === "JOB_PROGRESS") {
     const d = msg.data;
+    progressBarFill.classList.remove("indeterminate");
     progressPercentage.textContent = `${d.percent}%`;
     progressBarFill.style.width = `${d.percent}%`;
     progressTrackName.textContent = d.track || "Processing...";
@@ -199,6 +267,8 @@ function handleWsEvent(msg) {
     setErrorCount(d.errors);
     if (d.status === "error") appendError(d.error);
   } else if (msg.event === "JOB_COMPLETED") {
+    stopJobTimer();
+    progressBarFill.classList.remove("indeterminate");
     const d = msg.data;
     const errors = d.errors || 0;
     progressPercentage.textContent = "100%";
@@ -250,6 +320,11 @@ async function handleAnalyze() {
   const force = checkForceMode.checked;
   btnAnalyze.disabled = true;
 
+  // Immediate visual feedback (Proposal 1-C)
+  resetProgress("PREPARING", 0);
+  progressTrackName.textContent = "Connecting & initiating directory scan...";
+  progressBarFill.classList.add("indeterminate");
+
   try {
     const res = await fetch("/api/v1/jobs/analyze", {
       method: "POST",
@@ -260,6 +335,7 @@ async function handleAnalyze() {
     currentAnalyzeJobId = data.job_id;
   } catch (err) {
     alert(`Analyze failed: ${err.message}`);
+    hideProgress();
   } finally {
     btnAnalyze.disabled = false;
   }
@@ -318,9 +394,28 @@ function renderTable(tracks) {
       statusBadge = '<span class="badge-pill badge-warning" title="Limiter reduction capped at 3dB">Cap 3dB</span>';
     }
 
+    // Split path into primary filename and subfolder relative to current view (Proposal 2-B, 2-C)
+    const fullPath = t.relative_path || "";
+    let filename = fullPath;
+    let subfolder = "";
+    const lastSlashIdx = fullPath.lastIndexOf("/");
+    if (lastSlashIdx !== -1) {
+      filename = fullPath.substring(lastSlashIdx + 1);
+      subfolder = fullPath.substring(0, lastSlashIdx);
+      // Shorten subfolder if it starts with current selected path
+      if (currentPath && subfolder.startsWith(currentPath)) {
+        subfolder = subfolder.substring(currentPath.length).replace(/^\/+/, "");
+      }
+    }
+
     tr.innerHTML = `
       <td><input type="checkbox" class="track-select" data-id="${t.id}" checked></td>
-      <td style="font-family:var(--font-mono);font-size:0.82rem;" title="${t.relative_path}">${t.relative_path}</td>
+      <td>
+        <div class="track-path-cell" title="${escapeHtml(fullPath)}">
+          <span class="track-filename">${escapeHtml(filename)}</span>
+          ${subfolder ? `<span class="track-subfolder">${escapeHtml(subfolder)}</span>` : ""}
+        </div>
+      </td>
       <td><span class="badge-pill">${t.input_format.toUpperCase()} &rarr; ${t.output_format.toUpperCase()}</span></td>
       <td class="num">${lufs}</td>
       <td class="num">${tp}</td>

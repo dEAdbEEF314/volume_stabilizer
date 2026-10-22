@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
@@ -124,7 +125,49 @@ class JobManager:
         self.pool = ProcessPoolExecutor(max_workers=cfg.workers)
 
     async def run_analyze_job(self, job_id: str, subpath: str, force: bool = False):
-        tracks: List[ScannedTrack] = list(scan_directory(self.cfg.input_root, self.cfg.output_root, subpath))
+        loop = asyncio.get_running_loop()
+        last_broadcast_time = 0.0
+
+        def on_scan_progress(folders: int, audios: int, current_folder: str):
+            nonlocal last_broadcast_time
+            now = time.monotonic()
+            if now - last_broadcast_time >= 0.25:
+                last_broadcast_time = now
+                asyncio.run_coroutine_threadsafe(
+                    ws_manager.broadcast({
+                        "event": "JOB_SCANNING",
+                        "data": {
+                            "job_id": job_id,
+                            "folders_scanned": folders,
+                            "audio_found": audios,
+                            "current_folder": current_folder,
+                        }
+                    }),
+                    loop,
+                )
+
+        # Notify initial scanning state immediately
+        await ws_manager.broadcast({
+            "event": "JOB_SCANNING",
+            "data": {
+                "job_id": job_id,
+                "folders_scanned": 0,
+                "audio_found": 0,
+                "current_folder": subpath or "/",
+            }
+        })
+
+        # Run directory crawling in a background thread to prevent blocking event loop
+        def do_scan() -> List[ScannedTrack]:
+            return list(scan_directory(
+                self.cfg.input_root,
+                self.cfg.output_root,
+                subpath=subpath,
+                fast_mode=True,
+                progress_callback=on_scan_progress,
+            ))
+
+        tracks: List[ScannedTrack] = await loop.run_in_executor(None, do_scan)
         total = len(tracks)
         processed = 0
         error_count = 0

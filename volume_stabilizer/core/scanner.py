@@ -6,7 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator, Optional
 
 SUPPORTED_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".aiff", ".aif", ".flac"}
 LOSSY_CODECS = {"mp3", "aac"}
@@ -37,17 +37,7 @@ def detect_audio_codec(file_path: Path) -> str:
     ]
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
     if res.returncode != 0:
-        # Fallback to extension heuristic
-        ext = file_path.suffix.lower()
-        if ext == ".mp3":
-            return "mp3"
-        if ext in (".wav", ".aiff", ".aif"):
-            return "pcm"
-        if ext == ".flac":
-            return "flac"
-        if ext in (".m4a", ".aac"):
-            return "aac"
-        return "unknown"
+        return guess_codec_by_extension(file_path)
 
     try:
         data = json.loads(res.stdout)
@@ -57,16 +47,53 @@ def detect_audio_codec(file_path: Path) -> str:
     except Exception:
         pass
 
+    return guess_codec_by_extension(file_path)
+
+
+def guess_codec_by_extension(file_path: Path) -> str:
+    """Fast codec heuristic based purely on file extension."""
+    ext = file_path.suffix.lower()
+    if ext == ".mp3":
+        return "mp3"
+    if ext in (".wav", ".aiff", ".aif"):
+        return "pcm"
+    if ext == ".flac":
+        return "flac"
+    if ext in (".m4a", ".aac"):
+        return "aac"
     return "unknown"
 
 
-def scan_directory(input_root: Path, output_root: Path, subpath: str = "") -> Iterator[ScannedTrack]:
-    """Recursively scan directory for audio files."""
+def scan_directory(
+    input_root: Path,
+    output_root: Path,
+    subpath: str = "",
+    fast_mode: bool = False,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Iterator[ScannedTrack]:
+    """Recursively scan directory for audio files.
+
+    If fast_mode is True, avoids ffprobe subprocesses during directory crawl
+    and resolves codecs via fast extension heuristics.
+    progress_callback is called periodically with (folders_scanned, audio_found, current_folder).
+    """
     scan_dir = (input_root / subpath).resolve()
     if not scan_dir.exists():
         return
 
+    folders_scanned = 0
+    audio_found = 0
+    seen_dirs = set()
+
     for path in sorted(scan_dir.rglob("*")):
+        parent = path.parent
+        if parent not in seen_dirs:
+            seen_dirs.add(parent)
+            folders_scanned += 1
+            if progress_callback:
+                rel_folder = str(parent.relative_to(input_root)) if parent != input_root else "/"
+                progress_callback(folders_scanned, audio_found, rel_folder)
+
         if not path.is_file():
             continue
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
@@ -78,8 +105,12 @@ def scan_directory(input_root: Path, output_root: Path, subpath: str = "") -> It
             continue
 
         stat = path.stat()
-        codec = detect_audio_codec(path)
         ext = path.suffix.lower()
+
+        if fast_mode:
+            codec = guess_codec_by_extension(path)
+        else:
+            codec = detect_audio_codec(path)
 
         # Classify lossy vs lossless
         is_lossy = (
@@ -92,6 +123,11 @@ def scan_directory(input_root: Path, output_root: Path, subpath: str = "") -> It
         out_rel = rel.with_suffix(new_suffix)
         out_path = (output_root / out_rel).resolve()
 
+        audio_found += 1
+        if progress_callback and audio_found % 10 == 0:
+            rel_folder = str(parent.relative_to(input_root)) if parent != input_root else "/"
+            progress_callback(folders_scanned, audio_found, rel_folder)
+
         yield ScannedTrack(
             input_path=path.resolve(),
             relative_path=rel,
@@ -102,3 +138,6 @@ def scan_directory(input_root: Path, output_root: Path, subpath: str = "") -> It
             file_size=stat.st_size,
             mtime=stat.st_mtime,
         )
+
+    if progress_callback:
+        progress_callback(folders_scanned, audio_found, "Scan complete")
