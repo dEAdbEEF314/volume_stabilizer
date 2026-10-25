@@ -114,11 +114,30 @@
               <span class="badge-count" id="table-track-count">0 tracks</span>
             </div>
             <div class="table-actions">
+              <span class="selected-count" id="selected-count">0 selected</span>
+              <label class="page-size-label" for="page-size-select">Rows
+                <select id="page-size-select">
+                  <option value="10">10</option>
+                  <option value="20">20</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="all">ALL</option>
+                </select>
+              </label>
               <label class="select-all-label">
                 <input type="checkbox" id="select-all-checkbox" checked>
                 <span>Select All</span>
               </label>
             </div>
+          </div>
+
+          <div class="table-tabs" role="tablist" aria-label="Track list">
+            <button type="button" id="tab-todo" class="table-tab active" role="tab" aria-selected="true" data-tab="todo">
+              To Do <span class="tab-count" id="tab-todo-count">0</span>
+            </button>
+            <button type="button" id="tab-processed" class="table-tab" role="tab" aria-selected="false" data-tab="processed">
+              Processed <span class="tab-count" id="tab-processed-count">0</span>
+            </button>
           </div>
 
           <div class="table-responsive">
@@ -143,11 +162,14 @@
               </tbody>
             </table>
           </div>
+
+          <nav class="pager" id="pager" aria-label="Pagination" hidden></nav>
         </div>
       </section>
     </main>
   </div>
 
+  <script src="/static/js/track_view.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
 </html>

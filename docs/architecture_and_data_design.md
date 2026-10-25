@@ -351,4 +351,27 @@ vstab export --job-id=<job_id> --output=report.csv
    - `error`: `.row-error`（左端レッドライン）
 2. **スマート選択ルール**:
    - リスト描画時のチェックボックス初期値: `t.status NOT IN ('converted', 'bypassed')`
-   - 「Select All」クリック時は全件トグル可能。
+   - 「Select All」クリック時は、表示中ページの主テーブル行のみトグルする（7.4 参照）。
+
+### 7.4 トラック一覧のタブ分割・折りたたみ・ページング設計（仕様書 12章）
+1. **モジュール構成**:
+   - `static/js/track_view.js`: DOM 非依存の純粋ロジック（`TrackView.isProcessed` / `partition` / `normalizePageSize` / `pageLinks` / `paginate` / `buildView` / `isSelected` / `collectSelectedIds`）。
+   - `static/js/app.js`: `buildView()` の戻り値を元に `<tbody>` を描画し、タブ・折りたたみのイベントを処理。
+   - `index.html` は `track_view.js` を `app.js` より先に読み込む。
+2. **`buildView(tracks, activeTab, processedExpanded, pageSize, page)` の戻り値**（`pageSize` 省略時は ALL 扱い）:
+   - `tab`: 実際に表示するタブ（`'todo'` / `'processed'`。Processed が 0 件なら `'todo'` にフォールバック）
+   - `todoCount` / `processedCount` / `stabilizedCount` / `bypassedCount`
+   - `main`: 主テーブルに出すトラック配列（現在ページ分）
+   - `paging`: `{page, totalPages, total, start, end, links, showPager, hasPrev, hasNext}`（`links` は現在ページ中心の最大5ページ番号。`page` は範囲内に補正済み）
+   - `trailing`: To Do タブで展開中のとき、末尾に出す処理済みトラック配列（先頭 `pageSize` 件まで）
+   - `trailingHidden`: 展開部に収まらず省略した処理済み件数
+   - `showToggle` / `expanded`: 折りたたみ見出し行の表示有無と開閉
+   - `empty`: `null` / `'no-tracks'` / `'all-processed'`
+3. **DOM**:
+   - タブ: `#tab-todo`, `#tab-processed`（`role="tab"`, `aria-selected`）、件数 `#tab-todo-count`, `#tab-processed-count`
+   - 見出し行: `<tr class="processed-toggle-row">` 内の `button.processed-toggle`（`aria-expanded`）
+   - 行の `data-section`: `main`（Select All の対象）/ `trailing`（対象外）
+   - 表示件数プルダウン: `#page-size-select`（Select All の隣）。選択件数表示: `#selected-count`
+   - ページャー: `<nav id="pager">`（テーブル下）。ボタンは `data-page` 属性で遷移先を保持
+4. **選択状態**: 行ごとの上書きを `selectionOverrides = {id: bool}` で保持（未指定は `isSelected` の既定値）。DOM の再描画（ページ切替）でも失われず、`collectSelectedIds` が全ページ分の選択IDを返す。タブ切替・フォルダ移動・トラック再取得時に破棄する。
+5. **永続化**: 開閉状態 `localStorage['vs.processedExpanded']`（`'1'` / `'0'`）、表示件数 `localStorage['vs.pageSize']`（`'10'`〜`'100'` / `'all'`）。アクティブタブと現在ページはメモリ保持で、フォルダ移動・タブ切替・件数変更時に 1 ページ目へ戻す。

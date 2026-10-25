@@ -3,6 +3,23 @@ let currentPath = "";
 let currentAnalyzeJobId = null;
 let currentTracks = [];
 let ws = null;
+let activeTab = "todo";
+const PROCESSED_EXPANDED_KEY = "vs.processedExpanded";
+let processedExpanded = false;
+try {
+  processedExpanded = localStorage.getItem(PROCESSED_EXPANDED_KEY) === "1";
+} catch (e) {
+  // localStorage unavailable: default to collapsed
+}
+const PAGE_SIZE_KEY = "vs.pageSize";
+let pageSize = TrackView.DEFAULT_PAGE_SIZE;
+try {
+  pageSize = TrackView.normalizePageSize(localStorage.getItem(PAGE_SIZE_KEY));
+} catch (e) {
+  // localStorage unavailable: default page size
+}
+let currentPage = 1;
+let selectionOverrides = {};
 
 // DOM Elements
 const currentDirDisplay = document.getElementById("current-dir-display");
@@ -17,6 +34,13 @@ const selectAllCheckbox = document.getElementById("select-all-checkbox");
 const headerSelectAll = document.getElementById("header-select-all");
 const tracksTableBody = document.getElementById("tracks-table-body");
 const tableTrackCount = document.getElementById("table-track-count");
+const tabTodo = document.getElementById("tab-todo");
+const tabProcessed = document.getElementById("tab-processed");
+const tabTodoCount = document.getElementById("tab-todo-count");
+const tabProcessedCount = document.getElementById("tab-processed-count");
+const pageSizeSelect = document.getElementById("page-size-select");
+const selectedCount = document.getElementById("selected-count");
+const pager = document.getElementById("pager");
 const progressContainer = document.getElementById("progress-container");
 const progressTrackName = document.getElementById("progress-track-name");
 const progressPercentage = document.getElementById("progress-percentage");
@@ -54,6 +78,23 @@ document.addEventListener("DOMContentLoaded", () => {
   btnProgressClose.addEventListener("click", hideProgress);
   headerSelectAll.addEventListener("change", (e) => toggleSelectAll(e.target.checked));
   selectAllCheckbox.addEventListener("change", (e) => toggleSelectAll(e.target.checked));
+  [tabTodo, tabProcessed].forEach((btn) => {
+    btn.addEventListener("click", () => setActiveTab(btn.dataset.tab));
+  });
+
+  pageSizeSelect.value = String(pageSize);
+  pageSizeSelect.addEventListener("change", () => setPageSize(pageSizeSelect.value));
+  pager.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-page]");
+    if (!btn || btn.disabled) return;
+    currentPage = Number(btn.dataset.page);
+    renderTable(currentTracks);
+  });
+  tracksTableBody.addEventListener("change", (e) => {
+    if (!e.target.classList.contains("track-select")) return;
+    selectionOverrides[e.target.dataset.id] = e.target.checked;
+    syncSelectionState();
+  });
 });
 
 // Load System Status
@@ -72,6 +113,10 @@ async function loadSystemStatus() {
 
 // Directory Browser
 async function loadDirectoryTree(subpath) {
+  if (subpath !== currentPath) {
+    activeTab = "todo";
+    currentPage = 1;
+  }
   currentPath = subpath;
   currentDirDisplay.textContent = `/${subpath}`;
   folderList.innerHTML = '<div class="loader-spinner">Loading folders...</div>';
@@ -346,8 +391,7 @@ async function loadTracksForCurrentPath() {
     const res = await fetch(`/api/v1/tracks?path=${encodeURIComponent(currentPath)}`);
     if (!res.ok) return;
     const data = await res.json();
-    currentTracks = data.tracks || [];
-    renderTable(currentTracks);
+    setTracks(data.tracks || []);
 
     if (currentTracks.length > 0) {
       step1Badge.classList.remove("active");
@@ -400,41 +444,175 @@ async function fetchJobTracks(jobId) {
   try {
     const res = await fetch(`/api/v1/jobs/${jobId}/tracks`);
     const data = await res.json();
-    currentTracks = data.tracks || [];
-    renderTable(currentTracks);
+    setTracks(data.tracks || []);
   } catch (err) {
     console.error("Failed to fetch tracks:", err);
   }
 }
 
+function setTracks(tracks) {
+  currentTracks = tracks;
+  selectionOverrides = {};
+  renderTable(currentTracks);
+}
+
+function setActiveTab(tab) {
+  activeTab = tab;
+  currentPage = 1;
+  selectionOverrides = {};
+  renderTable(currentTracks);
+}
+
+function setPageSize(value) {
+  pageSize = TrackView.normalizePageSize(value);
+  currentPage = 1;
+  try {
+    localStorage.setItem(PAGE_SIZE_KEY, String(pageSize));
+  } catch (e) {
+    // localStorage unavailable: keep the in-memory state only
+  }
+  renderTable(currentTracks);
+}
+
+function setProcessedExpanded(expanded) {
+  processedExpanded = expanded;
+  try {
+    localStorage.setItem(PROCESSED_EXPANDED_KEY, expanded ? "1" : "0");
+  } catch (e) {
+    // localStorage unavailable: keep the in-memory state only
+  }
+  renderTable(currentTracks);
+}
+
 // Render Tracks Table
 function renderTable(tracks) {
-  const stabilizedCount = tracks.filter(t => t.status === "converted" || t.status === "bypassed").length;
-  const readyCount = tracks.length - stabilizedCount;
+  const view = TrackView.buildView(tracks, activeTab, processedExpanded, pageSize, currentPage);
+  activeTab = view.tab;
+  currentPage = view.paging.page;
 
   if (tracks.length > 0) {
-    tableTrackCount.innerHTML = `${tracks.length} tracks <span style="font-size:0.75rem;color:var(--text-muted);font-weight:400;">(${readyCount} ready, <strong style="color:var(--accent-green);">${stabilizedCount} stabilized</strong>)</span>`;
+    const readyCount = view.todoCount;
+    tableTrackCount.innerHTML = `${tracks.length} tracks <span style="font-size:0.75rem;color:var(--text-muted);font-weight:400;">(${readyCount} ready, <strong style="color:var(--accent-green);">${view.processedCount} stabilized</strong>)</span>`;
   } else {
     tableTrackCount.textContent = "0 tracks";
   }
 
+  tabTodoCount.textContent = view.todoCount;
+  tabProcessedCount.textContent = view.processedCount;
+  [tabTodo, tabProcessed].forEach((btn) => {
+    const isActive = btn.dataset.tab === view.tab;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", String(isActive));
+  });
+
   tracksTableBody.innerHTML = "";
 
-  if (tracks.length === 0) {
+  if (view.empty === "no-tracks") {
     tracksTableBody.innerHTML = `
       <tr class="empty-row">
         <td colspan="9">No tracks analyzed in this folder yet. Click <strong>Analyze Folder</strong> to preview loudness.</td>
       </tr>
     `;
+    syncSelectionState();
+    renderPager(view.paging);
     return;
   }
 
-  tracks.forEach((t) => {
+  if (view.empty === "all-processed") {
+    tracksTableBody.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="9">All tracks in this folder are already stabilized.
+          <button type="button" class="btn-mini" id="btn-open-processed">Open Processed tab</button></td>
+      </tr>
+    `;
+    document.getElementById("btn-open-processed").addEventListener("click", () => setActiveTab("processed"));
+  }
+
+  view.main.forEach((t) => tracksTableBody.appendChild(buildTrackRow(t, "main")));
+
+  if (view.showToggle) {
+    const toggleRow = document.createElement("tr");
+    toggleRow.className = "processed-toggle-row";
+    toggleRow.innerHTML = `
+      <td colspan="9">
+        <button type="button" class="processed-toggle" aria-expanded="${view.expanded}">
+          <span class="chevron">&#9656;</span>
+          <span>Processed: ${view.processedCount} tracks</span>
+          <span class="toggle-detail">(${view.stabilizedCount} stabilized, ${view.bypassedCount} bypassed)</span>
+        </button>
+      </td>
+    `;
+    toggleRow.querySelector("button").addEventListener("click", () => setProcessedExpanded(!processedExpanded));
+    tracksTableBody.appendChild(toggleRow);
+    view.trailing.forEach((t) => tracksTableBody.appendChild(buildTrackRow(t, "trailing")));
+    if (view.trailingHidden > 0) {
+      const moreRow = document.createElement("tr");
+      moreRow.className = "processed-more-row";
+      moreRow.innerHTML = `
+        <td colspan="9">Showing first ${view.trailing.length} of ${view.processedCount} processed tracks.
+          <button type="button" class="btn-mini" id="btn-more-processed">Open Processed tab</button></td>
+      `;
+      moreRow.querySelector("button").addEventListener("click", () => setActiveTab("processed"));
+      tracksTableBody.appendChild(moreRow);
+    }
+  }
+
+  syncSelectionState();
+  renderPager(view.paging);
+  attachReprocessListeners();
+}
+
+function renderPager(paging) {
+  if (!paging.showPager) {
+    pager.hidden = true;
+    pager.innerHTML = "";
+    return;
+  }
+  const btn = (label, page, disabled, extra = "") =>
+    `<button type="button" class="pager-btn" data-page="${page}" ${disabled ? "disabled" : ""} ${extra}>${label}</button>`;
+  const links = paging.links.map((p) =>
+    btn(p, p, false, p === paging.page ? 'aria-current="page"' : "")).join("");
+  pager.hidden = false;
+  pager.innerHTML = `
+    ${btn("&laquo; First", 1, !paging.hasPrev)}
+    ${btn("&lsaquo; Prev", paging.page - 1, !paging.hasPrev)}
+    ${links}
+    ${btn("Next &rsaquo;", paging.page + 1, !paging.hasNext)}
+    ${btn("Last &raquo;", paging.totalPages, !paging.hasNext)}
+    <span class="pager-range">${paging.start}–${paging.end} / ${paging.total}</span>
+  `;
+}
+
+// Select All covers only the main rows on the current page
+function syncSelectionState() {
+  const mainBoxes = document.querySelectorAll('tr[data-section="main"] .track-select');
+  const allChecked = mainBoxes.length > 0 && Array.from(mainBoxes).every(cb => cb.checked);
+  if (headerSelectAll) headerSelectAll.checked = allChecked;
+  if (selectAllCheckbox) selectAllCheckbox.checked = allChecked;
+  const n = TrackView.collectSelectedIds(currentTracks, activeTab, selectionOverrides).length;
+  selectedCount.textContent = `${n} selected`;
+}
+
+function attachReprocessListeners() {
+  document.querySelectorAll(".btn-reprocess").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      const trackId = e.target.getAttribute("data-id");
+      try {
+        await fetch(`/api/v1/tracks/${trackId}/reprocess`, { method: "POST" });
+      } catch (err) {
+        alert("Reprocess request failed");
+      }
+    });
+  });
+}
+
+function buildTrackRow(t, section) {
     const tr = document.createElement("tr");
+    tr.dataset.section = section;
 
     const isStabilized = t.status === "converted";
     const isBypassed = t.status === "bypassed";
-    const isProcessed = isStabilized || isBypassed;
+    const isProcessed = TrackView.isProcessed(t);
 
     if (isProcessed) {
       tr.className = "row-stabilized";
@@ -482,7 +660,7 @@ function renderTable(tracks) {
     }
 
     tr.innerHTML = `
-      <td><input type="checkbox" class="track-select" data-id="${t.id}" ${isProcessed ? "" : "checked"}></td>
+      <td><input type="checkbox" class="track-select" data-id="${t.id}" ${TrackView.isSelected(t, selectionOverrides) ? "checked" : ""}></td>
       <td>
         <div class="track-path-cell" title="${escapeHtml(fullPath)}">
           <span class="track-filename">${escapeHtml(filename)}</span>
@@ -499,54 +677,35 @@ function renderTable(tracks) {
         <button class="btn-mini btn-reprocess" data-id="${t.id}" title="Reprocess track">Re</button>
       </td>
     `;
-    tracksTableBody.appendChild(tr);
-  });
-
-  // Sync header select-all with whether any/all tracks are checked
-  const allBoxes = document.querySelectorAll(".track-select");
-  const checkedBoxes = document.querySelectorAll(".track-select:checked");
-  const allChecked = allBoxes.length > 0 && allBoxes.length === checkedBoxes.length;
-  if (headerSelectAll) headerSelectAll.checked = allChecked;
-  if (selectAllCheckbox) selectAllCheckbox.checked = allChecked;
-
-  // Attach per-track reprocess listener
-  document.querySelectorAll(".btn-reprocess").forEach(btn => {
-    btn.addEventListener("click", async (e) => {
-      const trackId = e.target.getAttribute("data-id");
-      try {
-        await fetch(`/api/v1/tracks/${trackId}/reprocess`, { method: "POST" });
-      } catch (err) {
-        alert("Reprocess request failed");
-      }
-    });
-  });
+    return tr;
 }
 
 function toggleSelectAll(checked) {
-  document.querySelectorAll(".track-select").forEach(cb => {
+  document.querySelectorAll('tr[data-section="main"] .track-select').forEach(cb => {
     cb.checked = checked;
+    selectionOverrides[cb.dataset.id] = checked;
   });
-  headerSelectAll.checked = checked;
-  selectAllCheckbox.checked = checked;
+  syncSelectionState();
 }
 
 // Stage 2: Convert
 async function handleConvert() {
-  let selectedCheckboxes = document.querySelectorAll(".track-select:checked");
-  let trackIds = Array.from(selectedCheckboxes).map(cb => cb.getAttribute("data-id"));
+  let trackIds = TrackView.collectSelectedIds(currentTracks, activeTab, selectionOverrides);
 
-  // If no track is checked, auto-select ready (unprocessed) tracks
+  // If no track is selected, auto-select every To Do track (To Do tab only)
+  if (trackIds.length === 0 && activeTab === "processed") {
+    alert("Check the processed tracks you want to reprocess first (enable 'Force Reprocess' to re-encode them).");
+    return;
+  }
   if (trackIds.length === 0) {
-    const readyBoxes = document.querySelectorAll("tr:not(.row-stabilized) .track-select");
-    if (readyBoxes.length > 0) {
-      readyBoxes.forEach(cb => { cb.checked = true; });
-      selectedCheckboxes = document.querySelectorAll(".track-select:checked");
-      trackIds = Array.from(selectedCheckboxes).map(cb => cb.getAttribute("data-id"));
-    }
+    const todoIds = TrackView.partition(currentTracks).todo.map(t => t.id);
+    todoIds.forEach(id => { selectionOverrides[id] = true; });
+    trackIds = todoIds;
+    renderTable(currentTracks);
   }
 
   if (trackIds.length === 0) {
-    alert("All tracks in this folder are already stabilized.\nTo reprocess them, check 'Select All' or enable 'Force Reprocess'.");
+    alert("All tracks in this folder are already stabilized.\nTo reprocess them, open the Processed tab, select tracks and enable 'Force Reprocess'.");
     return;
   }
 

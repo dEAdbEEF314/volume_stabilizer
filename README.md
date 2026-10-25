@@ -28,6 +28,10 @@ EBU R128（Integrated LUFS）に基づく音響解析を行い、元音源を損
   - 目標ラウドネス内（±0.5 LU）のMP3は**無加工ストリームコピー**（再圧縮劣化ゼロ）
 - **2段階ワークフロー Web UI ＆ CLI**:
   - Web UI: フォルダ選択 &rarr; 解析一覧プレビュー（除外チェック） &rarr; スタビライズ変換実行
+  - 解析一覧は **To Do / Processed の2タブ**で表示（初期表示は To Do）。処理済み（Stabilized / Bypassed）は To Do タブ下部の折りたたみ見出し `Processed: N tracks` からも展開でき、開閉状態はブラウザに記憶されます
+  - 「Select All」は表示中ページの行のみが対象で、選択状態はページを跨いで保持されます（「N selected」で選択数を確認可能）。「Stabilize Selected」はアクティブなタブの全ページの選択トラックを対象にします。処理済みを再処理する場合は Processed タブで対象を選び、`Force Reprocess` を有効にして実行
+  - **表示件数**: Select All の横の `Rows` プルダウンで `10 / 20 / 50 / 100 / ALL` を選択（初期値 `10`、ブラウザに記憶）。To Do / Processed タブでは1ページの行数、To Do 下部の展開部では先頭N件の表示件数になります（残りは Processed タブへ誘導）
+  - **ページ切り替え**: 一覧の下に `« First | ‹ Prev | 現在ページ中心の最大5ページ | Next › | Last »` と `11–20 / 57` の範囲表示を表示（1ページに収まる場合・`ALL` 選択時は非表示）
   - CLI: `vstab scan`, `vstab analyze`, `vstab convert --force`
 
 ---
@@ -105,6 +109,8 @@ vstab export --output=report.csv
 uv sync
 uv run pytest -v
 ```
+
+Web UI のフロントエンドロジック（`static/js/track_view.js`）は、dev 依存の `py-mini-racer`（V8）を使って pytest 内で検証されます（Node.js は不要）。
 
 ---
 
