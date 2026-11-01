@@ -1,8 +1,51 @@
 from pathlib import Path
-from volume_stabilizer.core.scanner import scan_directory
+import subprocess
+import pytest
+from volume_stabilizer.core.scanner import classify_codec, detect_audio_codec, scan_directory
 from volume_stabilizer.core.analyzer import analyze_track
 from volume_stabilizer.core.processor import process_audio
 from volume_stabilizer.core.hasher import compute_audio_hash
+
+
+def test_scanner_rejects_subpath_outside_input_root(tmp_path: Path):
+    input_root = tmp_path / "music"
+    output_root = tmp_path / "output"
+    outside_root = tmp_path / "outside"
+    input_root.mkdir()
+    output_root.mkdir()
+    outside_root.mkdir()
+
+    with pytest.raises(ValueError, match="inside input root"):
+        list(scan_directory(input_root, output_root, "../outside"))
+
+
+def test_scanner_skips_audio_symlink_outside_input_root(tmp_path: Path):
+    input_root = tmp_path / "music"
+    output_root = tmp_path / "output"
+    outside_audio = tmp_path / "private.wav"
+    input_root.mkdir()
+    output_root.mkdir()
+    outside_audio.write_bytes(b"not an audio file")
+    (input_root / "linked.wav").symlink_to(outside_audio)
+
+    assert list(scan_directory(input_root, output_root)) == []
+
+
+def test_m4a_codec_detection_distinguishes_aac_and_alac(tmp_path: Path, test_audio_generator):
+    input_root = tmp_path / "music"
+    input_root.mkdir()
+    source = test_audio_generator("source.wav", duration=0.2)
+
+    for codec, expected_format in (("aac", "mp3"), ("alac", "aiff")):
+        target = input_root / f"track-{codec}.m4a"
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(source), "-c:a", codec, str(target)],
+            check=True,
+        )
+        detected_codec = detect_audio_codec(target)
+
+        assert detected_codec == codec
+        assert classify_codec(detected_codec, target.suffix)[1] == expected_format
 
 
 def test_scanner_and_bypass(tmp_path: Path, test_audio_generator):

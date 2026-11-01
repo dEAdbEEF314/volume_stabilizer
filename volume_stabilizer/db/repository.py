@@ -49,10 +49,12 @@ class Repository:
                     """
                     UPDATE tracks
                     SET relative_path = ?, input_path = ?, output_path = ?,
-                        file_size = ?, mtime = ?, updated_at = CURRENT_TIMESTAMP
+                        input_format = ?, output_format = ?, file_size = ?,
+                        mtime = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
-                    (relative_path, input_path, output_path, file_size, mtime, existing.id),
+                    (relative_path, input_path, output_path, input_format, output_format,
+                     file_size, mtime, existing.id),
                 )
                 conn.commit()
                 return self.get_track_by_id(existing.id)

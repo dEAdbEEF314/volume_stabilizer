@@ -255,6 +255,12 @@ def test_app_js_wires_tab_logic():
     assert "vs.pageSize" in src
 
 
+def test_app_js_renders_directory_names_as_text():
+    src = (STATIC_DIR / "js" / "app.js").read_text(encoding="utf-8")
+    assert 'item.querySelector("span").textContent = dir;' in src
+    assert "<span>${dir}</span>" not in src
+
+
 def test_page_size_select_offers_five_steps():
     html = client.get("/").text
     block = html[html.index('id="page-size-select"'):]

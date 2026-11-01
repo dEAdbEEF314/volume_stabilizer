@@ -59,6 +59,21 @@ def test_db_repository(tmp_path: Path):
     assert analysis.integrated_lufs == -14.0
     assert analysis.target_gain_db == 4.0
 
+    updated = repo.upsert_track(
+        audio_hash="dummy_hash_12345",
+        relative_path="House/track.m4a",
+        input_path="/music/House/track.m4a",
+        output_path="/output/House/track.aiff",
+        input_format="alac",
+        output_format="aiff",
+        file_size=10485760,
+        mtime=1700000001.0,
+    )
+    assert updated.id == t.id
+    assert updated.input_format == "alac"
+    assert updated.output_format == "aiff"
+    assert updated.output_path == "/output/House/track.aiff"
+
 
 def test_cli_scan_and_convert_incremental(tmp_path: Path, test_audio_generator, monkeypatch):
     in_dir = tmp_path / "music"

@@ -9,8 +9,10 @@ from fastapi.testclient import TestClient
 from volume_stabilizer.api.app import app
 from volume_stabilizer.config import load_config
 from volume_stabilizer.core import ffmpeg_runner
+from volume_stabilizer.core.analyzer import LoudnessAnalysis
 from volume_stabilizer.db.database import init_db
 from volume_stabilizer.db.repository import Repository
+from volume_stabilizer.queue import worker_pool
 from volume_stabilizer.queue.worker_pool import JobManager
 
 
@@ -85,6 +87,73 @@ def _hang_worker(job_id: str) -> str:
 def _quick_worker(job_id: str) -> str:
     ffmpeg_runner.set_active_job(job_id)
     return "ok"
+
+
+@pytest.mark.parametrize(
+    ("detected_codec", "expected_format", "is_mp3"),
+    [("alac", "aiff", False), ("aac", "mp3", True)],
+)
+def test_analyze_worker_resolves_m4a_codec(monkeypatch, tmp_path, detected_codec, expected_format, is_mp3):
+    input_path = tmp_path / "track.m4a"
+    input_path.touch()
+    analyzed = {}
+    analysis = LoudnessAnalysis(-12.0, -2.0, 4.0, 2.0, False, 0.0, 2.0, False, "NONE")
+
+    monkeypatch.setattr(worker_pool, "set_active_job", lambda job_id: None)
+    monkeypatch.setattr(worker_pool, "compute_audio_hash", lambda path: "test-hash")
+    monkeypatch.setattr(worker_pool, "detect_audio_codec", lambda path: detected_codec, raising=False)
+    monkeypatch.setattr(
+        worker_pool,
+        "analyze_track",
+        lambda **kwargs: analyzed.update(kwargs) or analysis,
+    )
+
+    result = worker_pool._worker_analyze_track("job-id", str(input_path), "aac", -10.0, -1.0, 3.0, 0.5)
+
+    assert result[0] == "test-hash"
+    assert result[1:3] == (detected_codec, expected_format)
+    assert analyzed["is_mp3"] is is_mp3
+
+
+def test_analyze_job_persists_resolved_m4a_format(monkeypatch, tmp_path):
+    input_root = tmp_path / "music"
+    output_root = tmp_path / "output"
+    data_dir = tmp_path / "data"
+    input_root.mkdir()
+    output_root.mkdir()
+    (input_root / "track.m4a").write_bytes(b"fast scan placeholder")
+    monkeypatch.setenv("VS_INPUT_ROOT", str(input_root))
+    monkeypatch.setenv("VS_OUTPUT_ROOT", str(output_root))
+    monkeypatch.setenv("VS_DATA_DIR", str(data_dir))
+    cfg = load_config()
+    init_db(cfg.db_path)
+    repo = Repository(cfg.db_path)
+    job = repo.create_job("ANALYZE", "")
+    job_manager = JobManager(cfg)
+
+    async def resolved_worker_result(*args):
+        return "m4a-hash", "alac", "aiff", {
+            "integrated_lufs": -12.0,
+            "true_peak_dbtp": -2.0,
+            "lra_lu": 4.0,
+            "target_gain_db": 2.0,
+            "limiter_required": False,
+            "limiter_reduction_db": 0.0,
+            "bypass_eligible": False,
+            "warning_code": "NONE",
+        }
+
+    monkeypatch.setattr(job_manager, "_run_track", resolved_worker_result)
+    try:
+        asyncio.run(job_manager.run_analyze_job(job.id, ""))
+    finally:
+        job_manager.pool.shutdown(wait=True)
+
+    track = repo.get_track_by_hash("m4a-hash")
+    assert track is not None
+    assert track.input_format == "alac"
+    assert track.output_format == "aiff"
+    assert track.output_path == str(output_root / "track.aiff")
 
 
 def test_job_manager_abandons_worker_not_killable(monkeypatch):

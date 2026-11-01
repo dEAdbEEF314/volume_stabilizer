@@ -32,6 +32,24 @@ def get_job_manager(cfg: Config = Depends(get_cfg)) -> JobManager:
     return _job_manager
 
 
+def _resolve_input_path(cfg: Config, subpath: str) -> Path:
+    input_root = cfg.input_root.resolve()
+    target = (input_root / subpath).resolve()
+    try:
+        target.relative_to(input_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Path must be inside input root") from exc
+    return target
+
+
+def _track_path_filter(path: str) -> tuple[str, str, str]:
+    directory = path.strip("/")
+    if not directory:
+        return "", "", "%"
+    escaped = directory.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return directory, directory, f"{escaped}/%"
+
+
 class AnalyzeRequest(BaseModel):
     subpath: str = ""
     force: bool = False
@@ -63,7 +81,7 @@ def get_system_status(cfg: Config = Depends(get_cfg)):
 
 @router.get("/fs/tree")
 def get_directory_tree(path: str = Query("", description="Relative path inside /music"), cfg: Config = Depends(get_cfg)):
-    target = (cfg.input_root / path).resolve()
+    target = _resolve_input_path(cfg, path)
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=404, detail="Directory not found")
 
@@ -96,7 +114,7 @@ def list_tracks(
 ):
     init_db(cfg.db_path)
     with get_connection(cfg.db_path) as conn:
-        like_pattern = f"{path}%" if path else "%"
+        path_filter = _track_path_filter(path)
         cur = conn.execute(
             """
             SELECT t.id, t.relative_path, t.input_format, t.output_format, t.status,
@@ -104,10 +122,10 @@ def list_tracks(
                    a.limiter_required, a.limiter_reduction_db, a.bypass_eligible, a.warning_code
             FROM tracks t
             LEFT JOIN analysis_results a ON t.id = a.track_id
-            WHERE t.relative_path LIKE ?
+            WHERE (? = '' OR t.relative_path = ? OR t.relative_path LIKE ? ESCAPE char(92))
             ORDER BY t.relative_path ASC
             """,
-            (like_pattern,),
+            path_filter,
         )
         tracks = [dict(r) for r in cur.fetchall()]
 
@@ -127,6 +145,7 @@ def start_analyze_job(
     cfg: Config = Depends(get_cfg),
     jm: JobManager = Depends(get_job_manager),
 ):
+    _resolve_input_path(cfg, req.subpath)
     repo = Repository(cfg.db_path)
     job = repo.create_job(job_type="ANALYZE", target_dir=req.subpath, force=req.force)
     bg_tasks.add_task(jm.run_analyze_job, job.id, req.subpath, req.force)
@@ -165,7 +184,7 @@ def get_job_tracks(job_id: str, cfg: Config = Depends(get_cfg)):
 
     # Fetch tracks inside this job's target_dir from tracks + analysis_results
     with get_connection(cfg.db_path) as conn:
-        like_pattern = f"{job.target_dir}%" if job.target_dir else "%"
+        path_filter = _track_path_filter(job.target_dir)
         cur = conn.execute(
             """
             SELECT t.id, t.relative_path, t.input_format, t.output_format, t.status,
@@ -173,10 +192,10 @@ def get_job_tracks(job_id: str, cfg: Config = Depends(get_cfg)):
                    a.limiter_required, a.limiter_reduction_db, a.bypass_eligible, a.warning_code
             FROM tracks t
             LEFT JOIN analysis_results a ON t.id = a.track_id
-            WHERE t.relative_path LIKE ?
+            WHERE (? = '' OR t.relative_path = ? OR t.relative_path LIKE ? ESCAPE char(92))
             ORDER BY t.relative_path ASC
             """,
-            (like_pattern,),
+            path_filter,
         )
         tracks = [dict(r) for r in cur.fetchall()]
 
@@ -197,8 +216,14 @@ def start_convert_job(
         job = repo.get_job(req.analyze_job_id)
         if job:
             with get_connection(cfg.db_path) as conn:
-                like_pattern = f"{job.target_dir}%" if job.target_dir else "%"
-                cur = conn.execute("SELECT id FROM tracks WHERE relative_path LIKE ?", (like_pattern,))
+                path_filter = _track_path_filter(job.target_dir)
+                cur = conn.execute(
+                    """
+                    SELECT id FROM tracks
+                    WHERE (? = '' OR relative_path = ? OR relative_path LIKE ? ESCAPE char(92))
+                    """,
+                    path_filter,
+                )
                 track_ids = [r[0] for r in cur.fetchall()]
 
     if not track_ids:

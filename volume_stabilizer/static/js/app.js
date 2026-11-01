@@ -158,8 +158,9 @@ async function loadDirectoryTree(subpath) {
       item.className = "folder-item";
       item.innerHTML = `
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-        <span>${dir}</span>
+        <span></span>
       `;
+      item.querySelector("span").textContent = dir;
       item.addEventListener("click", () => {
         const next = subpath ? `${subpath}/${dir}` : dir;
         loadDirectoryTree(next);

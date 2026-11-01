@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from volume_stabilizer.config import Config, load_config
-from volume_stabilizer.core.scanner import scan_directory, ScannedTrack
+from volume_stabilizer.core.scanner import classify_codec, detect_audio_codec, scan_directory, ScannedTrack
 from volume_stabilizer.core.hasher import compute_audio_hash
 from volume_stabilizer.core.analyzer import analyze_track, LoudnessAnalysis
 from volume_stabilizer.core.processor import process_audio
@@ -41,16 +41,18 @@ def _error_kind(e: Exception) -> str:
 def _worker_analyze_track(
     job_id: str,
     input_path_str: str,
-    output_format: str,
+    guessed_codec: str,
     target_lufs: float,
     peak_ceiling_dbtp: float,
     max_limiter_reduction_db: float,
     bypass_tolerance_lu: float,
-) -> tuple[str, dict]:
+) -> tuple[str, str, str, dict]:
     """Worker task: compute audio hash and EBU R128 analysis."""
     set_active_job(job_id)
     p = Path(input_path_str)
     audio_hash = compute_audio_hash(p)
+    codec = detect_audio_codec(p) if p.suffix.lower() == ".m4a" else guessed_codec
+    _, output_format = classify_codec(codec, p.suffix)
     analysis = analyze_track(
         file_path=p,
         is_mp3=(output_format == "mp3"),
@@ -59,7 +61,7 @@ def _worker_analyze_track(
         max_limiter_reduction_db=max_limiter_reduction_db,
         bypass_tolerance_lu=bypass_tolerance_lu,
     )
-    return audio_hash, asdict(analysis)
+    return audio_hash, codec, output_format, asdict(analysis)
 
 
 def _analysis_record_to_dict(rec, peak_ceiling_dbtp: float) -> dict:
@@ -234,24 +236,25 @@ class JobManager:
 
         for t in tracks:
             try:
-                audio_hash, analysis_dict = await self._run_track(
+                audio_hash, input_format, output_format, analysis_dict = await self._run_track(
                     job_id,
                     _worker_analyze_track,
                     str(t.input_path),
-                    t.output_format,
+                    t.codec,
                     self.cfg.target_lufs,
                     self.cfg.peak_ceiling_dbtp,
                     self.cfg.max_limiter_reduction_db,
                     self.cfg.bypass_tolerance_lu,
                 )
+                output_path = t.output_path.with_suffix(f".{output_format}")
 
                 track_rec = self.repo.upsert_track(
                     audio_hash=audio_hash,
                     relative_path=str(t.relative_path),
                     input_path=str(t.input_path),
-                    output_path=str(t.output_path),
-                    input_format=t.codec,
-                    output_format=t.output_format,
+                    output_path=str(output_path),
+                    input_format=input_format,
+                    output_format=output_format,
                     file_size=t.file_size,
                     mtime=t.mtime,
                 )

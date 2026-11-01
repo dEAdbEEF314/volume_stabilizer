@@ -64,6 +64,12 @@ def guess_codec_by_extension(file_path: Path) -> str:
     return "unknown"
 
 
+def classify_codec(codec: str, extension: str) -> tuple[bool, str]:
+    ext = extension.lower()
+    is_lossy = codec in LOSSY_CODECS or (codec == "unknown" and ext in (".mp3", ".aac"))
+    return is_lossy, "mp3" if is_lossy else "aiff"
+
+
 def scan_directory(
     input_root: Path,
     output_root: Path,
@@ -77,7 +83,13 @@ def scan_directory(
     and resolves codecs via fast extension heuristics.
     progress_callback is called periodically with (folders_scanned, audio_found, current_folder).
     """
+    input_root = input_root.resolve()
     scan_dir = (input_root / subpath).resolve()
+    try:
+        scan_dir.relative_to(input_root)
+    except ValueError as exc:
+        raise ValueError("Subpath must be inside input root") from exc
+
     if not scan_dir.exists():
         return
 
@@ -86,6 +98,11 @@ def scan_directory(
     seen_dirs = set()
 
     for path in sorted(scan_dir.rglob("*")):
+        try:
+            path.resolve().relative_to(input_root)
+        except ValueError:
+            continue
+
         parent = path.parent
         if parent not in seen_dirs:
             seen_dirs.add(parent)
@@ -112,13 +129,7 @@ def scan_directory(
         else:
             codec = detect_audio_codec(path)
 
-        # Classify lossy vs lossless
-        is_lossy = (
-            codec in LOSSY_CODECS
-            or (codec == "unknown" and ext in (".mp3", ".aac"))
-        )
-
-        output_format = "mp3" if is_lossy else "aiff"
+        is_lossy, output_format = classify_codec(codec, ext)
         new_suffix = ".mp3" if is_lossy else ".aiff"
         out_rel = rel.with_suffix(new_suffix)
         out_path = (output_root / out_rel).resolve()
