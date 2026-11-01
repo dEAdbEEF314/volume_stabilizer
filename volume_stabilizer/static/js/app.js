@@ -53,6 +53,8 @@ const progressTimer = document.getElementById("progress-timer");
 const progressHeartbeatWarning = document.getElementById("progress-heartbeat-warning");
 const progressErrorCount = document.getElementById("progress-error-count");
 const btnProgressClose = document.getElementById("btn-progress-close");
+const btnSkipCurrent = document.getElementById("btn-skip-current");
+let runningJobId = null;
 const errorPanel = document.getElementById("error-panel");
 const errorPanelSummary = document.getElementById("error-panel-summary");
 const errorList = document.getElementById("error-list");
@@ -76,6 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   btnProgressClose.addEventListener("click", hideProgress);
+  btnSkipCurrent.addEventListener("click", skipCurrentTrack);
   headerSelectAll.addEventListener("change", (e) => toggleSelectAll(e.target.checked));
   selectAllCheckbox.addEventListener("change", (e) => toggleSelectAll(e.target.checked));
   [tabTodo, tabProcessed].forEach((btn) => {
@@ -281,12 +284,28 @@ function appendError(err) {
   if (!err) return;
   errorPanel.hidden = false;
   const li = document.createElement("li");
+  const tag = err.kind === "io_skipped" ? "[I/O skipped] " : "";
   li.innerHTML = `
     <span class="err-track" title="${escapeHtml(err.track)}">&lrm;${escapeHtml(err.track)}&lrm;</span>
-    <span class="err-msg">${escapeHtml(err.message)}</span>
+    <span class="err-msg">${tag}${escapeHtml(err.message)}</span>
   `;
   errorList.appendChild(li);
   errorPanelSummary.textContent = `Failed tracks (${errorList.children.length})`;
+}
+
+async function skipCurrentTrack() {
+  if (!runningJobId) return;
+  if (!confirm("Abort the track currently being processed and treat it as an I/O error?")) return;
+  btnSkipCurrent.disabled = true;
+  try {
+    const res = await fetch(`/api/v1/jobs/${runningJobId}/skip-current`, { method: "POST" });
+    if (res.status === 409) alert("No track is being processed right now.");
+    else if (!res.ok) alert("Skip request failed.");
+  } catch (err) {
+    alert(`Skip request failed: ${err.message}`);
+  } finally {
+    btnSkipCurrent.disabled = false;
+  }
 }
 
 function handleWsEvent(msg) {
@@ -304,6 +323,8 @@ function handleWsEvent(msg) {
   } else if (msg.event === "JOB_STARTED") {
     progressBarFill.classList.remove("indeterminate");
     resetProgress(msg.data.type, msg.data.total);
+    runningJobId = msg.data.job_id;
+    btnSkipCurrent.hidden = false;
     progressTrackName.textContent = msg.data.total ? `Analyzing ${msg.data.total} tracks...` : "Preparing analysis...";
   } else if (msg.event === "JOB_PROGRESS") {
     const d = msg.data;
@@ -324,6 +345,8 @@ function handleWsEvent(msg) {
     if (d.status === "error") appendError(d.error);
   } else if (msg.event === "JOB_COMPLETED") {
     stopJobTimer();
+    runningJobId = null;
+    btnSkipCurrent.hidden = true;
     progressBarFill.classList.remove("indeterminate");
     const d = msg.data;
     const errors = d.errors || 0;

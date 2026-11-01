@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from .ffmpeg_runner import run as run_ffmpeg
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ def analyze_track(
         "-",
     ]
 
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+    proc = run_ffmpeg(cmd)
     stderr = proc.stderr
 
     i_match = re.search(r"Integrated loudness:.*?I:\s*([-\d.]+)\s*LUFS", stderr, re.DOTALL)

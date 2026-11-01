@@ -24,6 +24,19 @@ console = Console(width=160)
 
 
 @app.command()
+def init():
+    """Initialize the database and configured output directories."""
+    cfg = load_config()
+    init_db(cfg.db_path)
+    cfg.backup_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print("[bold green]Initialization complete.[/bold green]")
+    console.print(f"Database: {cfg.db_path}")
+    console.print(f"Output: {cfg.output_root}")
+    console.print(f"Backup: {cfg.backup_dir}")
+
+
+@app.command()
 def scan(
     subpath: str = typer.Argument("", help="Subdirectory inside /music to scan"),
 ):

@@ -252,6 +252,7 @@ def compute_audio_hash(file_path: str) -> str:
 | `GET` | `/jobs/{job_id}/tracks` | ジョブ対象曲の詳細一覧（解析結果付き） | `{ "items": [ { "id": "...", "path": "...", "lufs": -14.2, "gain": 4.2, "limiter_reduction": 1.2, "status": "ANALYZED", "excluded": false } ] }` |
 | `PATCH` | `/jobs/{job_id}/tracks/{track_id}` | 曲ごとの除外/包含切り替え | Body: `{ "excluded": true }` -> `{ "success": true }` |
 | `POST` | `/jobs/convert` | 変換ジョブ起動（第2段階） | Body: `{ "analyze_job_id": "uuid...", "force": false }` -> `{ "convert_job_id": "uuid..." }` |
+| `POST` | `/jobs/{job_id}/skip-current` | 実行中ジョブの現在トラックを I/O エラー扱いで中断（手動スキップ） | -> `202 { "skipped": true }` / ジョブ不明 `404` / 処理中トラックなし `409` |
 | `POST` | `/tracks/{track_id}/reprocess` | 個別曲の強制再処理（--force） | Body: `{}` -> `{ "job_id": "uuid..." }` |
 | `GET` | `/reports/export` | 解析・変換結果のCSVエクスポート | Query: `?job_id=uuid...` -> CSVファイルダウンロード |
 
@@ -296,7 +297,7 @@ GET /api/v1/tracks?path=Music_Library/AlbumA
 ```
 イベント種別:
 - `JOB_STARTED`: ジョブ開始
-- `JOB_PROGRESS`: トラック完了ごとの進捗更新
+- `JOB_PROGRESS`: トラック完了ごとの進捗更新（手動スキップ時は `status: "error"`、`error.kind: "io_skipped"`）
 - `TRACK_LOG`: 個別トラックの処理ログ（警告発生時など）
 - `JOB_COMPLETED`: 全トラック完了（サマリー付与）
 - `JOB_FAILED`: エラー中断

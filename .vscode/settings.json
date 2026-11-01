@@ -1,0 +1,24 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /mnt/workspace/volume_stabilizer && git status --short && git branch --show-current && git remote -v && grep -c \"paginate\\\\\\|collectSelectedIds\" volume_stabilizer/static/js/track_view\\.js; wc -l volume_stabilizer/static/js/track_view\\.js; git log --oneline \\| head -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /mnt/workspace/volume_stabilizer && source \\.venv/bin/activate && python -m pytest -q 2>&1 \\| tail -3 && git diff --stat \\| tail -3 && ls \\.vscode$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /mnt/workspace/volume_stabilizer && git add README\\.md docs pyproject\\.toml tests/test_web_track_view\\.py volume_stabilizer/static && git commit -q -F - <<'EOF'\nfeat: トラック一覧をTo Do/Processedタブ化し、表示件数とページ切り替えを追加\n\n- To Do / Processed の2タブで一覧を分割し、処理済みを普段は見えない状態にした\n- To Do タブ下部に折りたたみ式の「Processed」セクションを追加\\(開閉状態を localStorage に保存\\)\n- 表示件数プルダウン\\(10/20/50/100/ALL、初期値10、localStorage に保存\\)を Select All の横に追加\n- 一覧の下に先頭/前へ/最大5ページ番号/次へ/末尾のページャーと範囲表示を追加\n- 選択状態をページ跨ぎで保持し、Stabilize Selected はアクティブタブの全ページの選択分を対象にした\n- 分類・ページ分割・選択判定を DOM 非依存の track_view\\.js に分離\n- 仕様書\\(12章\\)・設計書・実装計画・README を改定\n- pytest で V8\\(py-mini-racer\\) 経由のロジック検証と静的アセット検証を追加\nEOF\ngit log --oneline -1 && git status --short && git push origin main 2>&1 \\| tail -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^rtk ps -eo pid,ppid,stat,etime,wchan:20,cmd --sort=-etime \\| grep -Ei \"volume\\|stabil\\|uvicorn\\|python\\|ffmpeg\\|sox\" \\| grep -v grep \\| head -30$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^rtk \\.venv/bin/python -m pytest -q tests/test_db_and_cli\\.py -k cli_init$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

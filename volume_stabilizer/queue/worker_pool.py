@@ -17,12 +17,15 @@ from volume_stabilizer.core.analyzer import analyze_track, LoudnessAnalysis
 from volume_stabilizer.core.processor import process_audio
 from volume_stabilizer.core.tagger import copy_metadata
 from volume_stabilizer.core.backup import backup_existing_output
+from volume_stabilizer.core.ffmpeg_runner import SkippedByUser, clear_skip, request_skip, set_active_job
 from volume_stabilizer.db.repository import Repository
 from volume_stabilizer.api.websocket import ws_manager
 
 logger = logging.getLogger(__name__)
 
 MAX_REPORTED_ERRORS = 200
+# ffmpeg を kill した後、ワーカーの復帰を待つ秒数(超えたらワーカーを放棄する)
+SKIP_GRACE_SEC = 5.0
 
 
 def _short_error(e: Exception, limit: int = 300) -> str:
@@ -31,7 +34,12 @@ def _short_error(e: Exception, limit: int = 300) -> str:
     return msg if len(msg) <= limit else msg[: limit - 1] + "…"
 
 
+def _error_kind(e: Exception) -> str:
+    return "io_skipped" if isinstance(e, SkippedByUser) else "error"
+
+
 def _worker_analyze_track(
+    job_id: str,
     input_path_str: str,
     output_format: str,
     target_lufs: float,
@@ -40,6 +48,7 @@ def _worker_analyze_track(
     bypass_tolerance_lu: float,
 ) -> tuple[str, dict]:
     """Worker task: compute audio hash and EBU R128 analysis."""
+    set_active_job(job_id)
     p = Path(input_path_str)
     audio_hash = compute_audio_hash(p)
     analysis = analyze_track(
@@ -81,6 +90,7 @@ def _analysis_record_to_dict(rec, peak_ceiling_dbtp: float) -> dict:
 
 
 def _worker_convert_track(
+    job_id: str,
     input_path_str: str,
     output_path_str: str,
     output_format: str,
@@ -90,23 +100,32 @@ def _worker_convert_track(
     peak_ceiling_dbtp: float,
 ) -> str:
     """Worker task: process audio (gain/limiter), backup if needed, encode, copy tags."""
+    set_active_job(job_id)
     in_p = Path(input_path_str)
     out_p = Path(output_path_str)
     bck_root = Path(backup_dir_str)
     analysis = LoudnessAnalysis(**analysis_dict)
 
-    # 1. Back up old output if force and output exists
-    if force and out_p.exists():
-        backup_existing_output(out_p, bck_root, out_p.name)
+    try:
+        # 1. Back up old output if force and output exists
+        if force and out_p.exists():
+            backup_existing_output(out_p, bck_root, out_p.name)
 
-    # 2. Process audio & encode
-    process_audio(
-        input_path=in_p,
-        output_path=out_p,
-        analysis=analysis,
-        output_format=output_format,
-        peak_ceiling_dbtp=peak_ceiling_dbtp,
-    )
+        # 2. Process audio & encode
+        process_audio(
+            input_path=in_p,
+            output_path=out_p,
+            analysis=analysis,
+            output_format=output_format,
+            peak_ceiling_dbtp=peak_ceiling_dbtp,
+        )
+    except SkippedByUser:
+        # 書きかけの出力を残さない(NAS 停止中は失敗しうるので best-effort)
+        try:
+            out_p.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
     # 3. Preserve metadata & Serato cues
     copy_metadata(
@@ -123,6 +142,38 @@ class JobManager:
         self.cfg = cfg
         self.repo = Repository(cfg.db_path)
         self.pool = ProcessPoolExecutor(max_workers=cfg.workers)
+        self._skip_events: dict[str, asyncio.Event] = {}
+
+    def skip_current(self, job_id: str) -> bool:
+        """Abort the track currently processed by `job_id`. False if none is in flight."""
+        ev = self._skip_events.get(job_id)
+        if ev is None:
+            return False
+        request_skip(job_id)
+        ev.set()
+        return True
+
+    async def _run_track(self, job_id: str, fn, *args):
+        """Run one track in the pool; a manual skip raises SkippedByUser."""
+        loop = asyncio.get_running_loop()
+        ev = asyncio.Event()
+        self._skip_events[job_id] = ev
+        fut = loop.run_in_executor(self.pool, fn, job_id, *args)
+        ev_task = asyncio.ensure_future(ev.wait())
+        try:
+            await asyncio.wait({fut, ev_task}, return_when=asyncio.FIRST_COMPLETED)
+            if not fut.done():
+                # ffmpeg を kill 済み。ワーカーが SkippedByUser で戻るのを待つ
+                await asyncio.wait({fut}, timeout=SKIP_GRACE_SEC)
+            if fut.done():
+                return fut.result()
+            # ffmpeg 以外(タグ書き込み等)で停止中: ワーカーを放棄して続行する
+            fut.add_done_callback(lambda f: f.cancelled() or f.exception())
+            raise SkippedByUser("Skipped by user (worker abandoned)")
+        finally:
+            ev_task.cancel()
+            self._skip_events.pop(job_id, None)
+            clear_skip(job_id)
 
     async def run_analyze_job(self, job_id: str, subpath: str, force: bool = False):
         loop = asyncio.get_running_loop()
@@ -183,8 +234,8 @@ class JobManager:
 
         for t in tracks:
             try:
-                audio_hash, analysis_dict = await loop.run_in_executor(
-                    self.pool,
+                audio_hash, analysis_dict = await self._run_track(
+                    job_id,
                     _worker_analyze_track,
                     str(t.input_path),
                     t.output_format,
@@ -238,7 +289,7 @@ class JobManager:
                 logger.error(f"Error analyzing {t.input_path}: {e}")
                 processed += 1
                 error_count += 1
-                err = {"track": str(t.relative_path), "message": _short_error(e)}
+                err = {"track": str(t.relative_path), "message": _short_error(e), "kind": _error_kind(e)}
                 if len(errors) < MAX_REPORTED_ERRORS:
                     errors.append(err)
                 self.repo.update_job_progress(
@@ -322,8 +373,8 @@ class JobManager:
                 continue
 
             try:
-                status = await loop.run_in_executor(
-                    self.pool,
+                status = await self._run_track(
+                    job_id,
                     _worker_convert_track,
                     t.input_path,
                     t.output_path,
@@ -360,7 +411,7 @@ class JobManager:
                 logger.error(f"Error converting {t.input_path}: {e}")
                 error_count += 1
                 processed += 1
-                err = {"track": t.relative_path, "message": _short_error(e)}
+                err = {"track": t.relative_path, "message": _short_error(e), "kind": _error_kind(e)}
                 if len(errors) < MAX_REPORTED_ERRORS:
                     errors.append(err)
                 try:

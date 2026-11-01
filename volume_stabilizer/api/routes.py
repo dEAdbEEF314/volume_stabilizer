@@ -142,6 +142,20 @@ def get_job_status(job_id: str, cfg: Config = Depends(get_cfg)):
     return job
 
 
+@router.post("/jobs/{job_id}/skip-current", status_code=202)
+def skip_current_track(
+    job_id: str,
+    cfg: Config = Depends(get_cfg),
+    jm: JobManager = Depends(get_job_manager),
+):
+    repo = Repository(cfg.db_path)
+    if not repo.get_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not jm.skip_current(job_id):
+        raise HTTPException(status_code=409, detail="No track is currently being processed")
+    return {"skipped": True}
+
+
 @router.get("/jobs/{job_id}/tracks")
 def get_job_tracks(job_id: str, cfg: Config = Depends(get_cfg)):
     repo = Repository(cfg.db_path)

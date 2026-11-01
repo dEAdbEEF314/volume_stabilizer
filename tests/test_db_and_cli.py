@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 from typer.testing import CliRunner
 from volume_stabilizer.cli.main import app
@@ -5,6 +6,23 @@ from volume_stabilizer.db.database import init_db
 from volume_stabilizer.db.repository import Repository
 
 runner = CliRunner()
+
+
+def test_cli_init_creates_database_and_output_directories(tmp_path: Path, monkeypatch):
+    output_dir = tmp_path / "output"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("VS_INPUT_ROOT", str(tmp_path / "music"))
+    monkeypatch.setenv("VS_OUTPUT_ROOT", str(output_dir))
+    monkeypatch.setenv("VS_DATA_DIR", str(data_dir))
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.stdout
+    assert (data_dir / "volume_stabilizer.db").exists()
+    assert (output_dir / ".backup").is_dir()
+    with sqlite3.connect(data_dir / "volume_stabilizer.db") as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"tracks", "analysis_results", "jobs", "job_items", "backups"} <= tables
 
 
 def test_db_repository(tmp_path: Path):

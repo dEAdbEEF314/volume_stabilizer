@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from .analyzer import LoudnessAnalysis
+from .ffmpeg_runner import run as run_ffmpeg
 
 
 def process_audio(
@@ -29,7 +29,7 @@ def process_audio(
             "-map_metadata", "-1",
             str(output_path),
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+        res = run_ffmpeg(cmd)
         if res.returncode != 0:
             raise RuntimeError(f"Bypass stream copy failed: {res.stderr}")
         return
@@ -76,6 +76,6 @@ def process_audio(
         str(output_path),
     ]
 
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
+    res = run_ffmpeg(cmd)
     if res.returncode != 0:
         raise RuntimeError(f"Audio encoding failed: {res.stderr}")
